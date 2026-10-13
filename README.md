@@ -39,8 +39,8 @@ cd ~/src/astro-tools
 `~/.config/astro-tools/config`:
 
 ```bash
-ASTRO_ARCHIVE=/Volumes/Astro                     # the archive drive
-ASTRO_NAS=/Volumes/home/Astrophotography         # where astro-backup copies it
+ASTRO_ARCHIVE=/Volumes/Astro                            # the archive drive
+ASTRO_NAS=atlas:/volume1/homes/theresa/Astrophotography # where astro-backup copies it (host:/path over SSH, or a mounted folder)
 ```
 
 Environment variables of the same names override the file.
@@ -58,7 +58,7 @@ astro-backup                                # mirror the archive to the NAS and 
 | Command | What it does |
 |---|---|
 | `astro-ingest` | Files new Seestar output into the archive by target and night, verifies every copy, updates `MANIFEST.sha256` and each target's `notes.md` |
-| `astro-backup` | Copies the archive to the NAS (never deletes there), then verifies the NAS copy against `MANIFEST.sha256`, repairing bad copies from the archive |
+| `astro-backup` | Copies the archive to the NAS over SSH (or to a mounted share), never deleting there, then verifies the NAS copy against `MANIFEST.sha256` and repairs bad copies from the archive |
 | `seestar-split-panels` | Groups a mosaic's subs into one folder per panel by clustering their RA/Dec |
 | `seestar-reject-frames` | Finds and sets aside frames spoiled by an obstruction (e.g. a lit tree branch) |
 | `seestar-stack-panels` | Stacks each panel into a master with Siril |
@@ -99,15 +99,46 @@ subfolders are searched.
 astro-backup [DESTINATION]
 ```
 
-Copies everything on the archive drive (except macOS housekeeping files) to
-`ASTRO_NAS`, skipping files already there with the same size that aren't newer.
-Then it checks every file on the NAS against `MANIFEST.sha256`:
+`DESTINATION` (default `ASTRO_NAS`) is either:
 
-- a file that doesn't match is recopied from the archive and checked again;
+- **`host:/path` — over SSH (recommended).** rsync sends only new or changed
+  files, then the NAS checksums its own copy against `MANIFEST.sha256` and
+  reports only mismatches, so nothing is read back over the network. `host` is
+  an alias from `~/.ssh/config`, and key-based login must work
+  (see [Setting up SSH to the NAS](#setting-up-ssh-to-the-nas)).
+- **`/local/path` — a mounted share**, e.g. `/Volumes/home/Astrophotography`.
+  Copies with `cp` (macOS's built-in rsync fails on SMB shares) and verifies by
+  reading every file back. Much slower, and sensitive to the share dropping.
+
+Either way:
+
+- it never deletes anything on the NAS, and re-running only sends what's missing;
+- a NAS file that fails verification is recopied from the archive and checked again;
 - a file edited after the manifest was written (e.g. `notes.md`) passes if the
-  NAS copy matches the archive's current version.
+  NAS copy matches the archive's current version;
+- the Mac is kept awake for the run (`caffeinate`);
+- logs go to `<archive>/_tools/logs/`.
 
-Logs go to `<archive>/_tools/logs/`. It never deletes anything on the NAS.
+#### Setting up SSH to the NAS
+
+On a Synology (DSM 7): enable **Control Panel → Terminal & SNMP → SSH** (note
+the port) and **Control Panel → File Services → rsync**. Only accounts in the
+*administrators* group can log in over SSH. Then, on the Mac:
+
+```bash
+[ -f ~/.ssh/id_ed25519.pub ] || ssh-keygen -t ed25519
+ssh-copy-id -p 2222 theresa@atlas.local
+# DSM home folders are often too permissive for sshd to accept keys:
+ssh -p 2222 theresa@atlas.local 'chmod 755 ~ && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'
+printf '\nHost atlas\n  HostName atlas.local\n  Port 2222\n  User theresa\n' >> ~/.ssh/config
+ssh atlas echo ok          # must print "ok" without asking for a password
+```
+
+and set `ASTRO_NAS=atlas:/volume1/homes/theresa/Astrophotography` in
+`~/.config/astro-tools/config`.
+
+If the copy step misbehaves with macOS's built-in rsync (openrsync), install the
+standard one with `brew install rsync`; `astro-backup` uses it automatically.
 
 ### Mosaics
 

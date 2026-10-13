@@ -4,5 +4,6 @@
 # The archive drive (Targets/, MANIFEST.sha256, ...)
 ASTRO_ARCHIVE=/Volumes/Astro
 
-# Where astro-backup copies the archive to
-ASTRO_NAS=/Volumes/home/Astrophotography
+# Where astro-backup copies the archive to: host:/path over SSH (an ~/.ssh/config alias),
+# or a mounted folder such as /Volumes/home/Astrophotography
+ASTRO_NAS=atlas:/volume1/homes/theresa/Astrophotography
