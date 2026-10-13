@@ -283,7 +283,7 @@ def refresh_notes(archive, target):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Ingest Seestar data into the Astro archive.")
+    ap = argparse.ArgumentParser(prog="astro-ingest", description="Ingest Seestar data into the Astro archive.")
     ap.add_argument("sources", nargs="+", help="Seestar MyWorks folder(s) or any folder containing Seestar output")
     ap.add_argument("--archive", default=ARCHIVE_DEFAULT)
     ap.add_argument("--dry-run", action="store_true", help="show what would be copied, change nothing")
