@@ -35,7 +35,10 @@ esac
 if [ "$MODE" = ssh ]; then
   # ------------------------------------------------------------------ SSH mode
   q() { printf '%q' "$1"; }                                   # quote for the remote shell
-  remote() { ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" "$@"; }
+  # Keepalives: a quiet-but-alive connection stays up during long remote work (the NAS-side
+  # checksum pass), and a dead one is noticed in ~2 minutes instead of hanging.
+  SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=8"
+  remote() { ssh $SSH_OPTS "$HOST" "$@"; }
   remote true 2>/dev/null || { echo "Can't log in to '$HOST' without a password. Set up an SSH key (see the README)."; exit 1; }
   case "$RPATH" in *' '*) echo "The NAS path must not contain spaces: $RPATH"; exit 1 ;; esac
   remote "mkdir -p $(q "$RPATH")" || exit 1
@@ -47,16 +50,34 @@ if [ "$MODE" = ssh ]; then
   for r in /opt/homebrew/bin/rsync /usr/local/bin/rsync; do [ -x "$r" ] && { RSYNC="$r"; break; }; done
   EX=(); for e in "${EXCLUDES[@]}"; do EX+=(--exclude "$e"); done
 
-  echo "=== $(date +%H:%M:%S) copying with $RSYNC (only new or changed files are sent)"
-  "$RSYNC" -rt -e "ssh -o BatchMode=yes" "${EX[@]}" "$SRC/" "$HOST:$RPATH/" | grep -v '/$'
-  rc=${PIPESTATUS[0]}
-  [ "$rc" -eq 0 ] || { echo "rsync exited with code $rc. Re-run to resume; only what's missing is sent."; exit 1; }
+  # rsync skips what's already on the NAS, so after a dropped connection we just run it again.
+  TRIES="${ASTRO_BACKUP_TRIES:-6}"; WAIT="${ASTRO_BACKUP_RETRY_WAIT:-60}"; try=1
+  while :; do
+    echo "=== $(date +%H:%M:%S) copying with $RSYNC (only new or changed files are sent; attempt $try/$TRIES)"
+    "$RSYNC" -rt -e "ssh $SSH_OPTS" "${EX[@]}" "$SRC/" "$HOST:$RPATH/" | grep -v '/$'
+    rc=${PIPESTATUS[0]}
+    [ "$rc" -eq 0 ] && break
+    if [ "$try" -ge "$TRIES" ]; then
+      echo "rsync failed $try times (last exit code $rc). Re-run later; only what's missing will be sent."; exit 1
+    fi
+    echo "--- rsync stopped (exit code $rc), probably a dropped connection. Retrying in ${WAIT}s."
+    sleep "$WAIT"
+    until remote true 2>/dev/null; do
+      try=$((try+1)); [ "$try" -le "$TRIES" ] || { echo "The NAS is not reachable. Re-run later."; exit 1; }
+      echo "--- NAS not reachable yet; waiting ${WAIT}s"; sleep "$WAIT"
+    done
+    try=$((try+1))
+  done
   echo "=== $(date +%H:%M:%S) copy complete"
 
   TOTAL=$(wc -l < "$SRC/MANIFEST.sha256" | tr -d ' ')
   echo "=== $(date +%H:%M:%S) verifying $TOTAL files (the NAS checksums its own disks; only mismatches come back)"
   FAILED="$(mktemp)"
-  remote "cd $(q "$RPATH") && sha256sum -c MANIFEST.sha256 2>/dev/null | grep -v ': OK\$'" > "$FAILED"
+  DONE_MARK="__ASTRO_VERIFY_DONE__"
+  remote "cd $(q "$RPATH") && { sha256sum -c MANIFEST.sha256 2>/dev/null | grep -v ': OK\$'; echo $DONE_MARK; }" > "$FAILED"
+  # No end marker = the connection dropped mid-check; never report success on a partial check.
+  grep -qx "$DONE_MARK" "$FAILED" || { echo "The checksum pass on the NAS was interrupted. Re-run astro-backup (nothing will be recopied)."; exit 1; }
+  grep -vx "$DONE_MARK" "$FAILED" > "$FAILED.x"; mv "$FAILED.x" "$FAILED"
   nas_sha() { remote "sha256sum $(q "$RPATH/$1") 2>/dev/null" | cut -c1-64; }
   put() { remote "mkdir -p $(q "$(dirname "$RPATH/$1")") && cat > $(q "$RPATH/$1.partial") && mv -f $(q "$RPATH/$1.partial") $(q "$RPATH/$1")" < "$SRC/$1"; }
 else
