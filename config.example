@@ -7,3 +7,6 @@ ASTRO_ARCHIVE=/Volumes/Astro
 # Where astro-backup copies the archive to: host:/path over SSH (an ~/.ssh/config alias),
 # or a mounted folder such as /Volumes/home/Astrophotography
 ASTRO_NAS=atlas:/volume1/homes/theresa/Astrophotography
+
+# Where the Seestar's MyWorks folder mounts (astro-ingest's default SOURCE)
+ASTRO_SOURCE=/Volumes/Seestar/MyWorks

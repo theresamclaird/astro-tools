@@ -2,10 +2,11 @@
 """
 Ingest new Seestar data into the Astro archive.
 
-    astro-ingest SOURCE [SOURCE ...] [--dry-run] [--yes] [--no-previews] [--archive PATH]
+    astro-ingest [SOURCE ...] [--dry-run] [--yes] [--no-previews] [--archive PATH]
 
 SOURCE is a Seestar "MyWorks" folder, or any folder containing Seestar output
 (the telescope's storage, a copy on another drive, ...). Subfolders are searched.
+With no SOURCE, $ASTRO_SOURCE is used (default /Volumes/Seestar/MyWorks).
 
 What it does
   * Light frames   -> Targets/<target>/raw/<evening-date>_<scope>[_mosaic]_<filter>/
@@ -35,6 +36,8 @@ Target names
 import argparse, collections, datetime, hashlib, os, re, shutil, sys
 
 ARCHIVE_DEFAULT = os.environ.get("ASTRO_ARCHIVE", "/Volumes/Astro")
+SOURCE_DEFAULT = os.environ.get("ASTRO_SOURCE", "/Volumes/Seestar/MyWorks")
+
 ALIASES = {  # Seestar object name -> catalog id used for folder matching
     "C 12": "NGC 6946", "C 19": "IC 5146", "C 20": "NGC 7000", "C 23": "NGC 891",
     "Sadr": "IC 1318", "Lunar": "Moon", "Solar": "Sun",
@@ -284,18 +287,21 @@ def refresh_notes(archive, target):
 
 def main():
     ap = argparse.ArgumentParser(prog="astro-ingest", description="Ingest Seestar data into the Astro archive.")
-    ap.add_argument("sources", nargs="+", help="Seestar MyWorks folder(s) or any folder containing Seestar output")
+    ap.add_argument("sources", nargs="*", help="Seestar MyWorks folder(s) (default: $ASTRO_SOURCE, %s)" % SOURCE_DEFAULT)
     ap.add_argument("--archive", default=ARCHIVE_DEFAULT)
     ap.add_argument("--dry-run", action="store_true", help="show what would be copied, change nothing")
     ap.add_argument("--yes", "-y", action="store_true", help="don't ask for confirmation")
     ap.add_argument("--no-previews", action="store_true", help="skip the per-frame JPG previews")
     a = ap.parse_args()
 
+    if not a.sources:
+        a.sources = [SOURCE_DEFAULT]
+
     if not os.path.isfile(os.path.join(a.archive, "MANIFEST.sha256")):
         sys.exit("Archive not found at %s (no MANIFEST.sha256). Is the Astro drive mounted?" % a.archive)
     for s in a.sources:
         if not os.path.isdir(s):
-            sys.exit("Source folder not found: %s" % s)
+            sys.exit("Source folder not found: %s (is the Seestar connected and mounted?)" % s)
 
     print("Scanning %s ..." % ", ".join(a.sources))
     todo, already, conflicts, unknown, thumbs, new_targets = plan(a.sources, a.archive, not a.no_previews)

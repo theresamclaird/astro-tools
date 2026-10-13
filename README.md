@@ -41,6 +41,7 @@ cd ~/Projects/astro-tools
 ```bash
 ASTRO_ARCHIVE=/Volumes/Astro                            # the archive drive
 ASTRO_NAS=atlas:/volume1/homes/theresa/Astrophotography # where astro-backup copies it (host:/path over SSH, or a mounted folder)
+ASTRO_SOURCE=/Volumes/Seestar/MyWorks                   # where astro-ingest looks when no SOURCE is given
 ```
 
 Environment variables of the same names override the file.
@@ -48,9 +49,9 @@ Environment variables of the same names override the file.
 ## The nightly routine
 
 ```bash
-astro-ingest "/path/to/MyWorks" --dry-run   # see what's new and where it will go
-astro-ingest "/path/to/MyWorks"             # copy, verify, update notes.md
-astro-backup                                # mirror the archive to the NAS and verify
+astro-ingest --dry-run   # see what's new on the Seestar and where it will go
+astro-ingest             # copy, verify, update notes.md
+astro-backup             # mirror the archive to the NAS and verify
 ```
 
 ## Commands
@@ -70,11 +71,12 @@ Every command takes `--help`.
 ### astro-ingest
 
 ```
-astro-ingest SOURCE [SOURCE ...] [--dry-run] [--yes] [--no-previews] [--archive PATH]
+astro-ingest [SOURCE ...] [--dry-run] [--yes] [--no-previews] [--archive PATH]
 ```
 
 `SOURCE` is a Seestar `MyWorks` folder (or anything containing Seestar output);
-subfolders are searched.
+subfolders are searched. With no `SOURCE`, `ASTRO_SOURCE` is used
+(default `/Volumes/Seestar/MyWorks`).
 
 - Light frames → `Targets/<target>/raw/<evening-date>_<scope>[_mosaic]_<filter>/`,
   with the per-frame JPGs in `previews/`.
