@@ -12,8 +12,8 @@ those two things separate.
 ## Install
 
 ```bash
-git clone git@github.com:theresamclaird/astro-tools.git ~/src/astro-tools
-cd ~/src/astro-tools
+git clone git@github.com:theresamclaird/astro-tools.git ~/Projects/astro-tools
+cd ~/Projects/astro-tools
 ./install.sh
 ```
 
@@ -121,16 +121,24 @@ Either way:
 
 #### Setting up SSH to the NAS
 
-On a Synology (DSM 7): enable **Control Panel → Terminal & SNMP → SSH** (note
-the port) and **Control Panel → File Services → rsync**. Only accounts in the
-*administrators* group can log in over SSH. Then, on the Mac:
+On a Synology (DSM 7): enable **Control Panel → Terminal & SNMP → SSH** and
+**Control Panel → File Services → rsync**. Only accounts in the *administrators*
+group can log in over SSH, and the account needs the rsync privilege
+(**Application Privileges → rsync**).
+
+> The SSH port in Terminal & SNMP and the "SSH encryption port" on the rsync tab
+> must match. If they differ, plain `ssh` works but rsync over SSH fails with
+> "Permission denied, please try again". Port 22 is fine on a home network that
+> doesn't forward SSH from the internet.
+
+Then, on the Mac:
 
 ```bash
 [ -f ~/.ssh/id_ed25519.pub ] || ssh-keygen -t ed25519
-ssh-copy-id -p 2222 theresa@atlas.local
+ssh-copy-id theresa@atlas.local
 # DSM home folders are often too permissive for sshd to accept keys:
-ssh -p 2222 theresa@atlas.local 'chmod 755 ~ && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'
-printf '\nHost atlas\n  HostName atlas.local\n  Port 2222\n  User theresa\n' >> ~/.ssh/config
+ssh theresa@atlas.local 'chmod 755 ~ && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'
+printf '\nHost atlas\n  HostName atlas.local\n  User theresa\n' >> ~/.ssh/config
 ssh atlas echo ok          # must print "ok" without asking for a password
 ```
 
