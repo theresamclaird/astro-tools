@@ -39,7 +39,15 @@ if [ "$MODE" = ssh ]; then
   # checksum pass), and a dead one is noticed in ~2 minutes instead of hanging.
   SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=8"
   remote() { ssh $SSH_OPTS "$HOST" "$@"; }
-  remote true 2>/dev/null || { echo "Can't log in to '$HOST' without a password. Set up an SSH key (see the README)."; exit 1; }
+  if ! err=$(remote true 2>&1); then
+    echo "Can't log in to '$HOST' over SSH. ssh said:"; echo "    ${err:-(no message)}"
+    case "$err" in
+      *ermission\ denied*|*assword*) echo "Key login isn't working; see 'Setting up SSH to the NAS' in the README." ;;
+      *efused*|*closed\ by*|*reset\ by*) echo "The NAS refused the connection. Check that SSH is enabled, and DSM's auto-block list (Control Panel > Security > Protection)." ;;
+      *imed\ out*|*o\ route*|*resolve*|*nreachable*) echo "The NAS isn't reachable from this Mac right now (network, or the NAS is busy/asleep)." ;;
+    esac
+    exit 1
+  fi
   case "$RPATH" in *' '*) echo "The NAS path must not contain spaces: $RPATH"; exit 1 ;; esac
   remote "mkdir -p $(q "$RPATH")" || exit 1
   FREE=$(remote "df -k $(q "$RPATH")" | awk 'NR==2{printf "%d", $4/1024/1024}')
