@@ -1,0 +1,8 @@
+# astro-tools configuration. Read by every astro-tools command.
+# Installed copy lives at ~/.config/astro-tools/config
+
+# The archive drive (Targets/, MANIFEST.sha256, ...)
+ASTRO_ARCHIVE=/Volumes/Astro
+
+# Where astro-backup copies the archive to
+ASTRO_NAS=/Volumes/home/Astrophotography

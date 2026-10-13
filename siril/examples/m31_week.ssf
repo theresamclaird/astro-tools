@@ -1,0 +1,38 @@
+############################################################
+# M31 mosaic, full week: Seestar S50 Pro, 2026-10-03 .. 10-09
+# 7,140 x 10 s subs (19.8 h), IRCUT, mosaic mode
+#
+# Same pipeline as the night-1 stack that worked on 10/04, scaled up:
+#   link -> debayer -> plate-solve -> register (max framing) -> stack
+# Intermediates are 16-bit to keep the run under ~800 GB on the T9.
+# Run via run_m31_week.sh (it sets the raw folder as Siril's start dir).
+############################################################
+requires 1.4.0
+
+set16bits
+setext fit
+
+# 1. Gather only the raw .fit subs (link ignores the .jpg/_thn.jpg previews),
+#    ordered by DATE-OBS, into the processing folder.
+link light -date -out=/Volumes/T9/Astrophotography/Processing/M31_2026-10
+cd /Volumes/T9/Astrophotography/Processing/M31_2026-10
+
+# 2. Debayer. No darks/flats for the Seestar; the dithered mosaic pattern
+#    plus rejection takes care of hot pixels.
+calibrate light -debayer
+
+# 3. Astrometric registration: plate-solve every frame from its header
+#    RA/DEC (the mosaic offsets are too large for star-matching registration).
+#    -nocache = fetch the catalogue per frame, needed for a ~3 deg field.
+seqplatesolve pp_light -nocache
+
+# 4. Write registered frames on a canvas covering the whole mosaic.
+#    Drop the worst 10% by star sharpness and the worst 10% by sky
+#    background (twilight / moonlight frames).
+seqapplyreg pp_light -framing=max -filter-wfwhm=90% -filter-bkg=90%
+
+# 5. Stack: winsorized sigma clipping, additive+scale normalization,
+#    noise weighting, full mosaic canvas, 32-bit linear result.
+stack r_pp_light rej w 3 3 -norm=addscale -fastnorm -weight=noise -maximize -32b -out=M31_week_linear
+
+close
