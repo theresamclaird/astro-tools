@@ -16,8 +16,8 @@
 #   --dry-run     list the nights, frame counts and space estimate, then stop
 #
 # Pipeline (the one that made the full-week M31 stack; see siril/examples/):
-#   link every raw .fit (read in place, never copied or modified)
-#   -> debayer (16-bit) -> plate-solve each frame from its header RA/Dec
+#   link every raw .fit (read in place, never modified) and convert them, debayered
+#   (16-bit), into one FITS-sequence file -> plate-solve each frame from its header RA/Dec
 #   -> register onto a canvas covering every pointing (-framing=max),
 #      dropping the worst 10% by star sharpness and by sky background
 #   -> delete the debayered frames (they're no longer needed)
@@ -103,24 +103,16 @@ else echo "Siril not found (siril-cli, /Applications/Siril.app, or the org.siril
 # ---- set up the run folder ----
 RUN="$WORK_ROOT/${TNAME}_$NAME"
 OUT="$TDIR/processing/$NAME"
-# Siril keeps every frame of a sequence open (link refuses, and stacking needs
-# it), so the open-file limit must exceed the frame count. Raise the soft
-# limit to the hard limit before anything else.
+# The frames are packed into one FITS-sequence file (Siril caps a sequence of
+# separate files at 10,000 frames), but stacking still opens many files at
+# once, so lift the soft open-file limit to the hard limit anyway.
 HARD=$(ulimit -Hn); [ "$HARD" = unlimited ] && HARD=1048576
 ulimit -n "$HARD" 2>/dev/null || true
-NOFILE=$(ulimit -n); [ "$NOFILE" = unlimited ] && NOFILE=1048576
-echo "Open-file limit: $NOFILE"
-if [ "$NOFILE" -lt $(( TOTAL + 1000 )) ]; then
-  echo "Too low for $TOTAL frames: Siril needs one file handle per frame."
-  echo "Raise the hard limit (e.g. 'DefaultLimitNOFILE=1048576' in /etc/systemd/system.conf"
-  echo "and /etc/systemd/user.conf, then reboot), or stack fewer nights with --nights."
-  exit 1
-fi
 
 # A run folder left by a run that failed before producing any frames is
 # reused; one with real work in it is not.
 if [ -e "$RUN" ]; then
-  if find "$RUN/work" -maxdepth 1 \( -name 'pp_light*' -o -name 'r_pp_light*' \) 2>/dev/null | grep -q .; then
+  if find "$RUN/work" -maxdepth 1 \( -name 'light*' -o -name 'r_light*' \) 2>/dev/null | grep -q .; then
     echo "Run folder already exists with work in it: $RUN (remove it or use --name)"; exit 1
   fi
   echo "Removing the empty run folder from a failed attempt: $RUN"; rm -rf "$RUN"
@@ -141,18 +133,17 @@ cat > "$RUN/register.ssf" <<EOF
 requires 1.4.0
 set16bits
 setext fit
-link light -date -out=$RUN/work
+convert light -debayer -fitseq -out=$RUN/work
 cd $RUN/work
-calibrate light -debayer
-seqplatesolve pp_light -nocache
-seqapplyreg pp_light -framing=max -filter-wfwhm=90% -filter-bkg=90%
+seqplatesolve light -nocache
+seqapplyreg light -framing=max -filter-wfwhm=90% -filter-bkg=90%
 close
 EOF
 cat > "$RUN/stack.ssf" <<EOF
 requires 1.4.0
 setext fit
 cd $RUN/work
-stack r_pp_light rej w 3 3 -norm=addscale -fastnorm -weight=noise -maximize -32b -out=$RUN/result_linear
+stack r_light rej w 3 3 -norm=addscale -fastnorm -weight=noise -maximize -32b -out=$RUN/result_linear
 close
 EOF
 
@@ -164,10 +155,11 @@ elif command -v caffeinate >/dev/null; then AWAKE=(caffeinate -i); fi
 t0=$(date +%s)
 echo; echo "--- 1/2: debayer, plate-solve, register ($(date +%T)) ---"
 ${AWAKE[@]+"${AWAKE[@]}"} "${SIRIL[@]}" -d "$RUN/links" -s "$RUN/register.ssf"
-reg=$(ls "$RUN/work"/r_pp_light_*.fit 2>/dev/null | wc -l | tr -d ' ')
+SEQF=$(ls "$RUN/work"/r_light*.seq 2>/dev/null | head -1 || true)
+reg=$( [ -n "$SEQF" ] && awk '/^S /{print $4; exit}' "$SEQF" || true ); reg=${reg:-0}
 [ "$reg" -gt 0 ] || { echo "Registration produced no frames; see the log above."; exit 1; }
 echo "registered $reg of $TOTAL frames; removing the debayered frames"
-rm -f "$RUN/work"/pp_light_*.fit "$RUN/work"/light_*.fit
+rm -f "$RUN/work"/light.fit "$RUN/work"/light_*.fit
 
 echo; echo "--- 2/2: stack ($(date +%T)) ---"
 ${AWAKE[@]+"${AWAKE[@]}"} "${SIRIL[@]}" -s "$RUN/stack.ssf"
@@ -178,7 +170,7 @@ mkdir -p "$OUT"
 cp "$RES" "$OUT/${TNAME}_${NAME}_linear.fit"
 { echo "astro-stack run $NAME"; echo "frames: $TOTAL selected, $reg registered"; echo "nights:"
   for d in "${SEL[@]}"; do echo "  $(basename "$d")"; done; } > "$OUT/README.txt"
-[ "$KEEP" -eq 1 ] || rm -f "$RUN/work"/r_pp_light_*.fit
+[ "$KEEP" -eq 1 ] || rm -f "$RUN/work"/r_light.fit "$RUN/work"/r_light_*.fit
 echo; echo "Done in $(( ($(date +%s) - t0) / 60 )) min."
 echo "Result: $OUT/${TNAME}_${NAME}_linear.fit"
 cp "$LOG" "$OUT/astro-stack.log"
