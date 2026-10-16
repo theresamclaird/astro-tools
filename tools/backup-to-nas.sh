@@ -21,7 +21,7 @@ LOG="$SRC/_tools/logs/backup-$(date +%Y%m%d-%H%M).log"
 exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date) backup $SRC -> $DST"
 
-EXCLUDES=(.Spotlight-V100 .fseventsd .Trashes .DS_Store '._*' '*.partial' _tools/logs)
+EXCLUDES=(.Spotlight-V100 .fseventsd .Trashes .DS_Store '._*' '*.partial' 'System Volume Information' '$RECYCLE.BIN' _tools/logs)
 NEED=$(du -sk "$SRC/Targets" "$SRC/_tools" | awk '{s+=$1} END{printf "%d", s/1024/1024}')
 sha() { shasum -a 256 "$1" 2>/dev/null | cut -c1-64; }
 manifest_sha() { grep -F "  $1" "$SRC/MANIFEST.sha256" | awk -v p="$1" 'substr($0,67)==p{print substr($0,1,64); exit}'; }

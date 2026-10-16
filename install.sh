@@ -27,6 +27,7 @@ done
 COMMANDS="
 astro-ingest|py|tools/ingest.py
 astro-backup|bash|tools/backup-to-nas.sh
+astro-stack|bash|tools/stack/astro-stack.sh
 seestar-split-panels|py|tools/mosaic/seestar_split_panels.py
 seestar-stack-panels|py|tools/mosaic/seestar_stack_panels.py
 seestar-prep-panels|py|tools/mosaic/seestar_prep_panels.py
@@ -45,11 +46,11 @@ if [ "$UNINSTALL" -eq 1 ]; then
 fi
 
 # ---- Python: a private venv with numpy (the mosaic tools need it) ----
-command -v python3 >/dev/null || { echo "python3 not found. On macOS: xcode-select --install"; exit 1; }
+command -v python3 >/dev/null || { echo "python3 not found. On macOS: xcode-select --install; on Ubuntu: sudo apt install python3 python3-venv"; exit 1; }
 PY="$REPO/.venv/bin/python"
 if [ ! -x "$PY" ]; then
   echo "Creating Python environment in $REPO/.venv"
-  python3 -m venv "$REPO/.venv"
+  python3 -m venv "$REPO/.venv" || { echo "Could not create the venv. On Ubuntu: sudo apt install python3-venv"; exit 1; }
 fi
 if ! "$PY" -c 'import numpy' 2>/dev/null; then
   echo "Installing numpy into the environment"
@@ -95,8 +96,9 @@ for c in "$(command -v siril-cli 2>/dev/null || true)" /Applications/Siril.app/C
          /opt/homebrew/bin/siril-cli /usr/local/bin/siril-cli; do
   [ -n "$c" ] && [ -x "$c" ] && { SIRIL="$c"; break; }
 done
+[ -z "$SIRIL" ] && command -v flatpak >/dev/null && flatpak info org.siril.Siril >/dev/null 2>&1 && SIRIL="Flatpak org.siril.Siril"
 echo
-[ -n "$SIRIL" ] && echo "Siril: $SIRIL" || echo "Siril not found (needed by seestar-stack-panels, -prep-panels, -mosaic): https://siril.org"
+[ -n "$SIRIL" ] && echo "Siril: $SIRIL" || echo "Siril not found (needed by astro-stack and the seestar-* mosaic tools): https://siril.org"
 case ":$PATH:" in
   *":$BIN:"*) echo "Done. Try: astro-ingest --help" ;;
   *) echo "Done, but $BIN is not on your PATH. Add this to ~/.zshrc and open a new terminal:"

@@ -1,7 +1,7 @@
 # astro-tools
 
 Command-line utilities for a Seestar (S50 Pro / S30) astrophotography workflow
-on macOS: getting each night's data off the telescope into a well-organized
+on macOS and Linux: getting each night's data off the telescope into a well-organized
 archive, backing that archive up, and turning mosaics into finished stacks with
 [Siril](https://siril.org).
 
@@ -60,6 +60,7 @@ astro-backup             # mirror the archive to the NAS and verify
 |---|---|
 | `astro-ingest` | Files new Seestar output into the archive by target and night, verifies every copy, updates `MANIFEST.sha256` and each target's `notes.md` |
 | `astro-backup` | Copies the archive to the NAS over SSH (or to a mounted share), never deleting there, then verifies the NAS copy against `MANIFEST.sha256` and repairs bad copies from the archive |
+| `astro-stack` | Stacks every night of one target from the archive with Siril: plate-solves each frame, registers onto the full mosaic canvas, stacks, and writes the result to the target's `processing/` folder |
 | `seestar-split-panels` | Groups a mosaic's subs into one folder per panel by clustering their RA/Dec |
 | `seestar-reject-frames` | Finds and sets aside frames spoiled by an obstruction (e.g. a lit tree branch) |
 | `seestar-stack-panels` | Stacks each panel into a master with Siril |
@@ -152,6 +153,35 @@ and set `ASTRO_NAS=atlas:/volume1/homes/theresa/Astrophotography` in
 
 If the copy step misbehaves with macOS's built-in rsync (openrsync), install the
 standard one with `brew install rsync`; `astro-backup` uses it automatically.
+
+### astro-stack
+
+```
+astro-stack TARGET [--nights GLOB] [--min-frames N] [--work DIR] [--name NAME] [--keep] [--dry-run]
+```
+
+Stacks all of a target's raw nights into one image. `TARGET` is the folder name
+or a unique prefix (`M31`). Start with `--dry-run`: it lists the nights it will
+use, the frame count and the scratch space needed.
+
+- Frames are read in place from the archive (symlinked, never copied or changed);
+  intermediates go to `--work` (default `$ASTRO_WORK`, else `/data/astro-work`).
+  Use a fast local disk with room for roughly 130 MB per frame at the peak.
+- Nights with fewer than `--min-frames` (default 50) are skipped, which drops
+  framing test shots. All selected nights must share one scope and filter
+  (from the folder names); mixing them is refused.
+- Pipeline: debayer (16-bit) → plate-solve every frame → register onto a canvas
+  covering every pointing, dropping the worst 10% by sharpness and by sky
+  background → stack (winsorized sigma clipping, noise weighting). Plate-solving
+  rather than star matching is what lets mosaic panels and differently framed
+  nights land together.
+- The result (32-bit linear FITS), a README listing the nights, and the log go to
+  `Targets/<target>/processing/<date>_siril-all/`. Registered frames are deleted
+  afterwards unless `--keep`.
+- Needs Siril 1.4+: `siril-cli` on the PATH, `/Applications/Siril.app`, or the
+  Flatpak (`org.siril.Siril`). The Flatpak must be allowed to see the archive and
+  scratch disk: `flatpak override --user --filesystem=/run/media/$USER --filesystem=/data org.siril.Siril`.
+- Keeps the machine awake for the run.
 
 ### Mosaics
 
