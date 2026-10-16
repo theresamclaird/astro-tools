@@ -103,7 +103,28 @@ else echo "Siril not found (siril-cli, /Applications/Siril.app, or the org.siril
 # ---- set up the run folder ----
 RUN="$WORK_ROOT/${TNAME}_$NAME"
 OUT="$TDIR/processing/$NAME"
-[ -e "$RUN" ] && { echo "Run folder already exists: $RUN (remove it or use --name)"; exit 1; }
+# Siril keeps every frame of a sequence open (link refuses, and stacking needs
+# it), so the open-file limit must exceed the frame count. Raise the soft
+# limit to the hard limit before anything else.
+HARD=$(ulimit -Hn); [ "$HARD" = unlimited ] && HARD=1048576
+ulimit -n "$HARD" 2>/dev/null || true
+NOFILE=$(ulimit -n); [ "$NOFILE" = unlimited ] && NOFILE=1048576
+echo "Open-file limit: $NOFILE"
+if [ "$NOFILE" -lt $(( TOTAL + 1000 )) ]; then
+  echo "Too low for $TOTAL frames: Siril needs one file handle per frame."
+  echo "Raise the hard limit (e.g. 'DefaultLimitNOFILE=1048576' in /etc/systemd/system.conf"
+  echo "and /etc/systemd/user.conf, then reboot), or stack fewer nights with --nights."
+  exit 1
+fi
+
+# A run folder left by a run that failed before producing any frames is
+# reused; one with real work in it is not.
+if [ -e "$RUN" ]; then
+  if find "$RUN/work" -maxdepth 1 \( -name 'pp_light*' -o -name 'r_pp_light*' \) 2>/dev/null | grep -q .; then
+    echo "Run folder already exists with work in it: $RUN (remove it or use --name)"; exit 1
+  fi
+  echo "Removing the empty run folder from a failed attempt: $RUN"; rm -rf "$RUN"
+fi
 mkdir -p "$RUN/links" "$RUN/work"
 LOG="$RUN/astro-stack.log"
 exec > >(tee -a "$LOG") 2>&1
@@ -139,7 +160,6 @@ EOF
 AWAKE=()
 if command -v systemd-inhibit >/dev/null && systemd-inhibit --what=sleep true >/dev/null 2>&1; then AWAKE=(systemd-inhibit --what=sleep:idle --who=astro-stack --why="stacking $TNAME")
 elif command -v caffeinate >/dev/null; then AWAKE=(caffeinate -i); fi
-ulimit -n 65536 2>/dev/null || ulimit -n 10240 2>/dev/null || true
 
 t0=$(date +%s)
 echo; echo "--- 1/2: debayer, plate-solve, register ($(date +%T)) ---"
