@@ -157,31 +157,39 @@ standard one with `brew install rsync`; `astro-backup` uses it automatically.
 ### astro-stack
 
 ```
-astro-stack TARGET [--nights GLOB] [--min-frames N] [--work DIR] [--name NAME] [--keep] [--dry-run]
+astro-stack TARGET [--nights GLOB] [--min-frames N] [--batch-max N] [--work DIR] [--name NAME] [--keep] [--dry-run]
 ```
 
 Stacks all of a target's raw nights into one image. `TARGET` is the folder name
-or a unique prefix (`M31`). Start with `--dry-run`: it lists the nights it will
-use, the frame count and the scratch space needed.
+or a unique prefix (`M31`). Start with `--dry-run`: it lists the nights, how
+they're batched, and the scratch space needed.
 
-- Frames are read in place from the archive (symlinked, never copied or changed);
+- **Install Siril's local Gaia catalogue first** (Scripts → Siril_Catalog_Installer,
+  or download `siril_cat_healpix8_astro.dat` from the Zenodo record named in that
+  script and set `core.catalogue_gaia_astro` to it). Plate-solving thousands of
+  frames against the online catalogue takes hours and fails whenever the
+  server does.
+- Frames are read in place from the archive (symlinked, never changed);
   intermediates go to `--work` (default `$ASTRO_WORK`, else `/data/astro-work`).
-  Use a fast local disk with room for roughly 130 MB per frame at the peak.
-- Nights with fewer than `--min-frames` (default 50) are skipped, which drops
-  framing test shots. All selected nights must share one scope and filter
-  (from the folder names); mixing them is refused.
-- Pipeline: debayer (16-bit) → plate-solve every frame → register onto a canvas
+- Nights are grouped in date order into batches of at most `--batch-max`
+  (default 9000) frames, because Siril refuses a sequence of more than 10,000
+  files. Each batch: debayer (16-bit) → plate-solve → check that registration
+  data was recorded (stops otherwise, deleting nothing) → register onto a canvas
   covering every pointing, dropping the worst 10% by sharpness and by sky
-  background → stack (winsorized sigma clipping, noise weighting). Plate-solving
-  rather than star matching is what lets mosaic panels and differently framed
-  nights land together.
+  background → stack (winsorized sigma clipping, noise weighting) → keep the
+  batch master and delete the batch's intermediates. With several batches, the
+  masters are plate-solved, registered together and averaged, weighted by the
+  number of frames in each.
+- Re-running the same command resumes: finished batch masters are skipped.
+- Separate files only: Siril 1.4 doesn't record registration data when
+  plate-solving a single-file (FITSEQ) sequence.
+- Nights with fewer than `--min-frames` (default 50) are skipped; all selected
+  nights must share one scope and filter (from the folder names).
 - The result (32-bit linear FITS), a README listing the nights, and the log go to
-  `Targets/<target>/processing/<date>_siril-all/`. Registered frames are deleted
-  afterwards unless `--keep`.
+  `Targets/<target>/processing/<date>_siril-all/`.
 - Needs Siril 1.4+: `siril-cli` on the PATH, `/Applications/Siril.app`, or the
-  Flatpak (`org.siril.Siril`). The Flatpak must be allowed to see the archive and
+  Flatpak (`org.siril.Siril`), which must be allowed to see the archive and
   scratch disk: `flatpak override --user --filesystem=/run/media/$USER --filesystem=/data org.siril.Siril`.
-- Keeps the machine awake for the run.
 
 ### Mosaics
 
