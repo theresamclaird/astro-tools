@@ -182,7 +182,9 @@ EOF
     echo "Stopping here; nothing has been deleted. Is the local catalogue installed? See the log above."
     exit 1
   fi
-  echo "  plate-solved with registration data: $solved of $bcount frames"
+  # (The .seq holds a registration line for every frame, solved or not; Siril's
+  # own "N images successfully platesolved" line above is the real solve count.)
+  echo "  registration data recorded ($solved entries for $bcount frames)"
   rm -f "$B/work"/light_*.fit
 
   cat > "$B/register.ssf" <<EOF
