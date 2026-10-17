@@ -126,6 +126,10 @@ if command -v systemd-inhibit >/dev/null && systemd-inhibit --what=sleep true >/
 elif command -v caffeinate >/dev/null; then AWAKE=(caffeinate -i); fi
 siril() { ${AWAKE[@]+"${AWAKE[@]}"} "${SIRIL[@]}" "$@"; }
 
+_t=$(mktemp -d); : > "$_t/a"
+if cp --update=none "$_t/a" "$_t/b" 2>/dev/null; then NOCLOBBER=--update=none; else NOCLOBBER=-n; fi
+rm -rf "$_t"
+
 # Number of frames with registration data in a Siril .seq file.
 reg_count() { local f n=0; f=$(ls "$1"/$2*.seq 2>/dev/null | head -1 || true); [ -n "$f" ] && n=$(grep -c '^R' "$f" || true); echo "${n:-0}"; }
 # Number of frames a sequence holds, from its .seq header.
@@ -152,8 +156,9 @@ for b in $(seq 1 "$NBATCH"); do
   for i in "${!SEL[@]}"; do
     [ "${BATCH[$i]}" = "$b" ] || continue
     echo "  $(basename "${SEL[$i]}")  ${CNT[$i]} frames"
-    # cp -n never overwrites; the archive copy is only read.
-    find "${SEL[$i]}" -maxdepth 1 -name '*.fit' -print0 | sort -z | xargs -0 sh -c 'cp -n "$@" "$0"' "$B/links/"
+    # Never overwrite; the archive copy is only read. (GNU cp 9.x warns about -n
+    # and prefers --update=none; BSD/macOS cp only knows -n.)
+    find "${SEL[$i]}" -maxdepth 1 -name '*.fit' -print0 | sort -z | xargs -0 sh -c 'opt=$0; dest=$1; shift; cp "$opt" "$@" "$dest"' "$NOCLOBBER" "$B/links/"
     bcount=$((bcount + CNT[i]))
   done
 
