@@ -8,8 +8,10 @@ ASTRO_ARCHIVE=/Volumes/Astro
 # or a mounted folder such as /Volumes/home/Astrophotography
 ASTRO_NAS=atlas:/volume1/homes/theresa/Astrophotography
 
-# Where the Seestar's MyWorks folder mounts (astro-ingest's default SOURCE)
-ASTRO_SOURCE=/Volumes/Seestar/MyWorks
+# Where the Seestar's MyWorks folder mounts (astro-ingest's default SOURCE).
+# Leave it commented out on Linux: the Seestar mounts in different places
+# (/run/media/$USER/..., or gvfs over MTP) and astro-ingest finds it itself.
+# ASTRO_SOURCE=/Volumes/Seestar/MyWorks
 # Scratch space for astro-stack's intermediate files (a fast local disk, not the archive)
 # ASTRO_WORK=/data/astro-work
 # On Linux the archive drive mounts elsewhere, e.g.:

@@ -2,7 +2,8 @@
 # astro-stack: stack every night of one target from the archive with Siril.
 #
 #   astro-stack TARGET [--nights GLOB] [--min-frames N] [--batch-max N] [--work DIR]
-#               [--name NAME] [--keep] [--dry-run]
+#               [--name NAME] [--rebuild] [--keep] [--dry-run]
+#   astro-stack TARGET --nights GLOB --adopt MASTER.fit [--frames N]
 #
 #   TARGET        target folder name, or a unique prefix of it (e.g. M31)
 #   --nights      only raw/ folders matching GLOB (default: all), e.g. '2026-10-1*'
@@ -14,11 +15,24 @@
 #                 else /data/astro-work). Use a fast local disk, never the archive.
 #   --name NAME   name of the run (default <today>_siril-all); the result goes to
 #                 <archive>/Targets/<target>/processing/NAME/
+#   --rebuild     ignore stored batch masters and restack every night
 #   --keep        keep the registered frames of each batch
-#   --dry-run     list the nights, batches and space estimate, then stop
+#   --dry-run     show which stored masters would be reused and which nights
+#                 would be stacked, with the space estimate, then stop
+#   --adopt F     record an existing batch master F (made by this pipeline) as
+#                 covering exactly the nights selected by --nights; --frames N
+#                 is how many frames it stacked (for the README). Then stops.
 #
-# Pipeline. Nights are grouped, in date order, into batches of at most
-# --batch-max frames. For each batch:
+# Incremental. Each batch master is kept in the target's store,
+# Targets/<target>/processing/batch-masters/, with a note of exactly which
+# nights (and frame counts) went into it. A run reuses every stored master
+# whose nights are all still selected with unchanged frame counts, stacks only
+# the remaining nights (grouped in date order into batches of at most
+# --batch-max frames), then combines all the masters. Adding a night therefore
+# costs one small batch plus the combine, not a full restack. Re-running after
+# a failure resumes the same way, since each batch is stored as soon as it's done.
+#
+# Each new batch:
 #   copy the batch's raw frames to the scratch disk, one file at a time (Siril
 #   reads with many threads at once; on a USB hard drive those scattered reads
 #   are several times slower than one sequential copy). The archive is only read.
@@ -29,10 +43,9 @@
 #      the worst 10% by star sharpness and by sky background
 #   -> stack: winsorized sigma clipping, add+scale normalization, noise weights
 #   -> keep the batch master, delete the batch's intermediate frames
-# With more than one batch, the masters are plate-solved, registered onto one
-# canvas and averaged, each weighted by the number of frames in it.
+# With more than one master, they're plate-solved, registered onto one canvas
+# and averaged, each weighted by the number of frames in it.
 #
-# Re-running the same command resumes: finished batches are kept and skipped.
 # Separate files only: Siril 1.4 doesn't record registration data when
 # plate-solving a single-file (FITSEQ) sequence.
 #
@@ -41,11 +54,17 @@
 # The machine is kept awake for the run (systemd-inhibit / caffeinate).
 set -euo pipefail
 
-usage() { sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 ARCHIVE="${ASTRO_ARCHIVE:-/Volumes/Astro}"
 WORK_ROOT="${ASTRO_WORK:-/data/astro-work}"
 NIGHTS='*'; MIN=50; BMAX=9000; NAME="$(date +%F)_siril-all"; KEEP=0; DRY=0; TARGET=""
+REBUILD=0; ADOPT=""; ADOPT_FRAMES=0
+HERE="$(cd "$(dirname "$0")" && pwd)"
+BM_PY=(python3 "$HERE/batch_masters.py")
+# Anything that changes how a batch master is made goes in here, so masters made
+# differently are never mixed into one result.
+SETTINGS="v1 debayer16 platesolve framing=max filter-wfwhm=90% filter-bkg=90% rej=w3,3 norm=addscale weight=noise"
 while [ $# -gt 0 ]; do
   case "$1" in
     --nights) NIGHTS="$2"; shift 2 ;;
@@ -54,6 +73,9 @@ while [ $# -gt 0 ]; do
     --work) WORK_ROOT="$2"; shift 2 ;;
     --name) NAME="$2"; shift 2 ;;
     --keep) KEEP=1; shift ;;
+    --rebuild) REBUILD=1; shift ;;
+    --adopt) ADOPT="$2"; shift 2 ;;
+    --frames) ADOPT_FRAMES="$2"; shift 2 ;;
     --dry-run|-n) DRY=1; shift ;;
     -h|--help) usage 0 ;;
     -*) echo "unknown option: $1"; usage 1 ;;
@@ -74,8 +96,8 @@ done
 [ "$n" -eq 1 ] || { echo "No unique target matching '$TARGET' with a raw/ folder in $ARCHIVE/Targets"; exit 1; }
 TNAME="$(basename "$TDIR")"
 
-# ---- pick the nights and group them into batches ----
-SEL=(); CNT=(); BATCH=(); TOTAL=0; KEY=""; BYTES=0; nb=1; inb=0; BIGGEST=0
+# ---- pick the nights ----
+SEL=(); CNT=(); TOTAL=0; KEY=""; BYTES=0
 echo "Target: $TNAME"
 for d in "$TDIR/raw/"$NIGHTS/; do
   [ -d "$d" ] || continue
@@ -87,25 +109,57 @@ for d in "$TDIR/raw/"$NIGHTS/; do
   if [ -n "$KEY" ] && [ "$k" != "$KEY" ]; then
     echo "Mixed scope/filter: $night is $k, earlier nights are $KEY. Use --nights to pick one set."; exit 1
   fi
-  if [ $((inb + cnt)) -gt "$BMAX" ]; then nb=$((nb+1)); inb=0; fi
-  inb=$((inb + cnt)); [ "$inb" -gt "$BIGGEST" ] && BIGGEST=$inb
-  KEY="$k"; SEL+=("${d%/}"); CNT+=("$cnt"); BATCH+=("$nb"); TOTAL=$((TOTAL+cnt))
+  KEY="$k"; SEL+=("${d%/}"); CNT+=("$cnt"); TOTAL=$((TOTAL+cnt))
   b=$(du -sk "$d" | cut -f1); BYTES=$((BYTES+b))
-  printf '  use   %-34s %6s frames  (batch %s)\n' "$night" "$cnt" "$nb"
 done
 [ "${#SEL[@]}" -gt 0 ] || { echo "No nights selected."; exit 1; }
-NBATCH=$nb
+night_list() { for i in "${!SEL[@]}"; do printf '%s\t%s\n' "$(basename "${SEL[$i]}")" "${CNT[$i]}"; done; }
+STORE="$TDIR/processing/batch-masters"
+
+if [ -n "$ADOPT" ]; then
+  [ -f "$ADOPT" ] || { echo "No such file: $ADOPT"; exit 1; }
+  echo "Adopting $ADOPT as the master for:"; night_list | sed 's/^/  /'
+  stored=$(night_list | "${BM_PY[@]}" add --store "$STORE" --settings "$SETTINGS" --file "$ADOPT" --frames "$ADOPT_FRAMES")
+  echo "Stored: $stored"
+  exit 0
+fi
+
+# ---- plan: reuse stored masters, batch the rest ----
+RB=(); [ "$REBUILD" -eq 1 ] && RB=(--rebuild)
+PLAN=$(night_list | "${BM_PY[@]}" plan --store "$STORE" --settings "$SETTINGS" --batch-max "$BMAX" ${RB[@]+"${RB[@]}"})
+REUSE=(); REUSE_FRAMES=0; BATCH=(); NBATCH=0
+while IFS=$'\t' read -r kind a b c; do
+  case "$kind" in
+    REUSE) REUSE+=("$a"); REUSE_FRAMES=$((REUSE_FRAMES + b))
+           echo "  reuse stored master ($b frames): $(echo "$c" | tr ',' ' ')" ;;
+    NEW)   for i in "${!SEL[@]}"; do if [ "$(basename "${SEL[$i]}")" = "$b" ]; then BATCH[$i]=$a; fi; done
+           if [ "$a" -gt "$NBATCH" ]; then NBATCH=$a; fi ;;
+  esac
+done <<< "$PLAN"
+BIGGEST=0
+for bn in $(seq 1 "$NBATCH"); do
+  sum=0
+  for i in "${!SEL[@]}"; do
+    if [ "${BATCH[$i]:-0}" = "$bn" ]; then
+      sum=$((sum + CNT[i]))
+      printf '  stack %-34s %6s frames  (new batch %s)\n' "$(basename "${SEL[$i]}")" "${CNT[$i]}" "$bn"
+    fi
+  done
+  if [ "$sum" -gt "$BIGGEST" ]; then BIGGEST=$sum; fi
+done
+NMASTERS=$(( ${#REUSE[@]} + NBATCH ))
 
 # Space, per batch (batches run one after another and clean up after
-# themselves): 16-bit debayered frames ~50 MB each, plus registered frames on
-# the mosaic canvas (larger, ~100+ MB; ~80% survive the filters).
+# themselves): raw copies ~19 MB, 16-bit debayered frames ~50 MB, plus
+# registered frames on the mosaic canvas (larger, ~110 MB; ~80% survive).
 NEED_GB=$(( BIGGEST * 19 / 1024 + BIGGEST * 50 / 1024 + BIGGEST * 80 / 100 * 110 / 1024 ))
 mkdir -p "$WORK_ROOT" 2>/dev/null || true
 FREE_GB=$(( $(df -Pk "$WORK_ROOT" | awk 'NR==2{print $4}') / 1024 / 1024 ))
 echo
-echo "$TOTAL frames ($(( TOTAL * 10 / 3600 )) h at 10 s), $(( BYTES / 1024 / 1024 )) GB raw, scope/filter $KEY, $NBATCH batch(es)"
-echo "Scratch: $WORK_ROOT  (~${NEED_GB} GB needed at peak for the largest batch, ${FREE_GB} GB free)"
-[ "$FREE_GB" -gt "$NEED_GB" ] || echo "WARNING: scratch space looks tight; the canvas size decides the real figure."
+echo "$TOTAL frames ($(( TOTAL * 10 / 3600 )) h at 10 s), $(( BYTES / 1024 / 1024 )) GB raw, scope/filter $KEY"
+echo "${#REUSE[@]} stored master(s) reused, $NBATCH new batch(es) to stack, $NMASTERS master(s) in the result"
+[ "$NBATCH" -gt 0 ] && echo "Scratch: $WORK_ROOT  (~${NEED_GB} GB needed at peak for the largest new batch, ${FREE_GB} GB free)"
+[ "$NBATCH" -eq 0 ] || [ "$FREE_GB" -gt "$NEED_GB" ] || echo "WARNING: scratch space looks tight; the canvas size decides the real figure."
 [ "$DRY" -eq 1 ] && { echo "(dry run: nothing done)"; exit 0; }
 
 # ---- find Siril (1.4+) ----
@@ -135,26 +189,26 @@ reg_count() { local f n=0; f=$(ls "$1"/$2*.seq 2>/dev/null | head -1 || true); [
 # Number of frames a sequence holds, from its .seq header.
 seq_count() { local f n=0; f=$(ls "$1"/$2*.seq 2>/dev/null | head -1 || true); [ -n "$f" ] && n=$(awk '/^S /{print $4; exit}' "$f"); echo "${n:-0}"; }
 
-# ---- run folder (re-running resumes) ----
+# ---- run folder ----
 RUN="$WORK_ROOT/${TNAME}_$NAME"
 OUT="$TDIR/processing/$NAME"
 MASTERS="$RUN/masters"
 mkdir -p "$MASTERS"
+USED=(${REUSE[@]+"${REUSE[@]}"})          # stored masters that go into the result
 LOG="$RUN/astro-stack.log"
 exec > >(tee -a "$LOG") 2>&1
 echo "=== astro-stack $TNAME $(date) ==="
 t0=$(date +%s)
-REG_TOTAL=0
+REG_TOTAL=$REUSE_FRAMES
 
 for b in $(seq 1 "$NBATCH"); do
   BM="$MASTERS/batch$b.fit"
-  if [ -f "$BM" ]; then echo; echo "--- batch $b/$NBATCH already stacked: $BM (skipping)"; continue; fi
   B="$RUN/batch$b"
   rm -rf "$B"; mkdir -p "$B/links" "$B/work"
   bcount=0
   echo; echo "--- batch $b/$NBATCH ($(date +%T)) ---"
   for i in "${!SEL[@]}"; do
-    [ "${BATCH[$i]}" = "$b" ] || continue
+    [ "${BATCH[$i]:-0}" = "$b" ] || continue
     echo "  $(basename "${SEL[$i]}")  ${CNT[$i]} frames"
     # Never overwrite; the archive copy is only read. (GNU cp 9.x warns about -n
     # and prefers --update=none; BSD/macOS cp only knows -n.)
@@ -212,41 +266,46 @@ EOF
   echo "  3/3 stack ($(date +%T))"
   siril -s "$B/stack.ssf"
   [ -f "$BM" ] || { echo "Stacking produced no batch master; see the log above."; exit 1; }
-  echo "$reg" > "$MASTERS/batch$b.frames"
+  # Store it at once, so a later failure (or a later run) reuses it.
+  stored=$(for i in "${!SEL[@]}"; do if [ "${BATCH[$i]:-0}" = "$b" ]; then printf '%s\t%s\n' "$(basename "${SEL[$i]}")" "${CNT[$i]}"; fi; done \
+           | "${BM_PY[@]}" add --store "$STORE" --settings "$SETTINGS" --file "$BM" --frames "$reg" --move)
+  USED+=("$stored"); REG_TOTAL=$((REG_TOTAL + reg))
   [ "$KEEP" -eq 1 ] || rm -rf "$B"
-  echo "  batch $b done: $BM"
+  echo "  batch $b done: $stored"
 done
 
-for b in $(seq 1 "$NBATCH"); do REG_TOTAL=$((REG_TOTAL + $(cat "$MASTERS/batch$b.frames" 2>/dev/null || echo 0))); done
-
 RES="$RUN/result_linear.fit"
-if [ "$NBATCH" -eq 1 ]; then
-  cp "$MASTERS/batch1.fit" "$RES"
+if [ "${#USED[@]}" -eq 1 ]; then
+  cp "${USED[0]}" "$RES"
 else
-  # Combine the batch masters: plate-solve, register onto one canvas, then a
-  # plain average weighted by how many frames went into each master.
-  C="$RUN/combine"; rm -rf "$C"; mkdir -p "$C"
+  # Combine the masters: plate-solve, register onto one canvas, then a plain
+  # average weighted by how many frames went into each master.
+  C="$RUN/combine"; rm -rf "$C" "$RES"; mkdir -p "$C/in"
+  k=0; for m in "${USED[@]}"; do k=$((k+1)); ln -s "$m" "$C/in/$(printf 'm_%03d.fit' "$k")"; done
   cat > "$C/combine.ssf" <<EOF
 requires 1.4.0
 set32bits
 setext fit
-link batch -out=$C
+link m -out=$C
 cd $C
-seqplatesolve batch
-seqapplyreg batch -framing=max
-stack r_batch rej n -norm=addscale -weight=nbstack -maximize -32b -out=${RES%.fit}
+seqplatesolve m
+seqapplyreg m -framing=max
+stack r_m rej n -norm=addscale -weight=nbstack -maximize -32b -out=${RES%.fit}
 close
 EOF
-  echo; echo "--- combining $NBATCH batch masters ($(date +%T)) ---"
-  siril -d "$MASTERS" -s "$C/combine.ssf"
+  echo; echo "--- combining ${#USED[@]} masters ($(date +%T)) ---"
+  siril -d "$C/in" -s "$C/combine.ssf"
 fi
-[ -f "$RES" ] || { echo "No final result; see the log above. The batch masters are in $MASTERS."; exit 1; }
+[ -f "$RES" ] || { echo "No final result; see the log above. The batch masters are in $STORE."; exit 1; }
 
 mkdir -p "$OUT"
 cp "$RES" "$OUT/${TNAME}_${NAME}_linear.fit"
-{ echo "astro-stack run $NAME"; echo "frames: $TOTAL selected, $REG_TOTAL stacked, $NBATCH batch(es)"; echo "nights:"
-  for i in "${!SEL[@]}"; do echo "  $(basename "${SEL[$i]}")  ${CNT[$i]} frames  batch ${BATCH[$i]}"; done; } > "$OUT/README.txt"
+{ echo "astro-stack run $NAME"
+  echo "frames: $TOTAL selected, $REG_TOTAL stacked, from ${#USED[@]} batch master(s) (${#REUSE[@]} reused, $NBATCH new)"
+  echo "settings: $SETTINGS"
+  echo "nights:"; night_list | sed 's/^/  /'
+  echo "masters:"; for m in "${USED[@]}"; do echo "  $(basename "$m")"; done; } > "$OUT/README.txt"
 echo; echo "Done in $(( ($(date +%s) - t0) / 60 )) min."
 echo "Result: $OUT/${TNAME}_${NAME}_linear.fit"
-echo "(Batch masters kept in $MASTERS; delete $RUN when you no longer need them.)"
+echo "(Batch masters are kept in $STORE for the next run; $RUN can be deleted.)"
 cp "$LOG" "$OUT/astro-stack.log"

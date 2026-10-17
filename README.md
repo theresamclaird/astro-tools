@@ -160,12 +160,29 @@ standard one with `brew install rsync`; `astro-backup` uses it automatically.
 ### astro-stack
 
 ```
-astro-stack TARGET [--nights GLOB] [--min-frames N] [--batch-max N] [--work DIR] [--name NAME] [--keep] [--dry-run]
+astro-stack TARGET [--nights GLOB] [--min-frames N] [--batch-max N] [--work DIR] [--name NAME]
+                   [--rebuild] [--keep] [--dry-run]
+astro-stack TARGET --nights GLOB --adopt MASTER.fit --frames N
 ```
 
 Stacks all of a target's raw nights into one image. `TARGET` is the folder name
-or a unique prefix (`M31`). Start with `--dry-run`: it lists the nights, how
-they're batched, and the scratch space needed.
+or a unique prefix (`M31`). Start with `--dry-run`: it lists the nights, which
+stored batch masters will be reused, how the rest are batched, and the scratch
+space needed.
+
+**Incremental.** Every batch master is kept in
+`Targets/<target>/processing/batch-masters/`, with a `.txt` beside it listing
+the settings and the nights (with frame counts) that went into it. A later run
+reuses any stored master whose nights are all still selected with the same
+frame counts, stacks only the nights not covered, and combines all the masters.
+So after a new night, re-running `astro-stack M31` stacks just that night. A
+master is not reused when one of its nights has gained or lost frames, when the
+pipeline settings change, or with `--rebuild` (stack everything again).
+Outdated masters stay in the store; delete them when you no longer want them.
+
+`--adopt` puts an existing master (from a run before the store existed) into
+the store as covering the nights matched by `--nights`; `--frames` is how many
+frames it stacked (for weighting). The file is copied, not moved.
 
 - **Install Siril's local Gaia catalogue first** (Scripts → Siril_Catalog_Installer,
   or download `siril_cat_healpix8_astro.dat` from the Zenodo record named in that
@@ -183,7 +200,8 @@ they're batched, and the scratch space needed.
   batch master and delete the batch's intermediates. With several batches, the
   masters are plate-solved, registered together and averaged, weighted by the
   number of frames in each.
-- Re-running the same command resumes: finished batch masters are skipped.
+- An interrupted run loses at most the batch in progress: each master goes into
+  the store as soon as it's finished.
 - Separate files only: Siril 1.4 doesn't record registration data when
   plate-solving a single-file (FITSEQ) sequence.
 - Nights with fewer than `--min-frames` (default 50) are skipped; all selected
