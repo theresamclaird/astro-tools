@@ -25,13 +25,13 @@ All commands run on Prometheus (Ubuntu) unless noted. Every command takes `--hel
 | T9 mirror | `/run/media/theresa/T9/Astro-mirror` | Second copy; must be exFAT to move between Mac and Linux |
 | NAS (Atlas) | `atlas:/volume1/homes/theresa/Astrophotography` | Third copy, over SSH |
 | Seestar | Auto-detected `MyWorks` folder | Plug into a rear-panel USB port, not a hub |
-| Tools | `~/Projects/astro-tools` | `git pull` updates every command |
+| Tools | `~/Projects/theresamclaird/astro-tools` | `git pull` updates every command |
 
 Inside the archive, each target has `raw/<night>/` (light frames), `seestar-stacks/`, `processing/` (rebuildable working files, including `batch-masters/`) and `final/` (finished images).
 
 ### One-time setup
 
-- [ ] Clone and install: `git clone https://github.com/theresamclaird/astro-tools.git ~/Projects/astro-tools && cd ~/Projects/astro-tools && ./install.sh`
+- [ ] Clone and install: `git clone https://github.com/theresamclaird/astro-tools.git ~/Projects/theresamclaird/astro-tools && cd ~/Projects/theresamclaird/astro-tools && ./install.sh`
 - [ ] Make sure `~/.local/bin` is on the PATH in both `~/.bashrc` and `~/.zshrc`.
 - [ ] Edit `~/.config/astro-tools/config`: `ASTRO_ARCHIVE=/run/media/theresa/Astro`, `ASTRO_WORK=/data/astro-work`, `ASTRO_NAS=atlas:/volume1/homes/theresa/Astrophotography`. Leave `ASTRO_SOURCE` commented out so the Seestar is found automatically.
 - [ ] Install Siril 1.4+ from Flatpak (`flatpak install flathub org.siril.Siril`), not apt. Ubuntu's package is a release candidate the scripts reject.
@@ -98,7 +98,7 @@ The NAS backup still drops its network connection partway through long runs. Unt
 
 `astro-frame-stats` measures every frame of one night and shows which frames a given filter would drop. Use it when choosing filter settings, not after every night. It only reads the archive.
 
-It was added after the other commands: after `git pull`, run `./install.sh` once in `~/Projects/astro-tools` to add it and the plotting library.
+It was added after the other commands: after `git pull`, run `./install.sh` once in `~/Projects/theresamclaird/astro-tools` to add it and the plotting library.
 
 1. Pick a night. A smaller one is faster for a first try: `2026-10-16` has 1,093 frames.
 2. Preview the space and where the report goes:
@@ -261,7 +261,7 @@ These still expect the old Seestar folder layout (`<Target>_mosaic_sub`) rather 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `command not found` in a new terminal or tmux | `~/.local/bin` isn't on the PATH in that shell | Add the PATH line to `~/.zshrc` and `~/.bashrc`; open a new terminal |
-| A new command is missing after `git pull` | Wrappers are made by the installer | Run `./install.sh` in `~/Projects/astro-tools` |
+| A new command is missing after `git pull` | Wrappers are made by the installer | Run `./install.sh` in `~/Projects/theresamclaird/astro-tools` |
 | Ingest stalls or stops after 20 failures | The Seestar's USB connection reset | Use a rear-panel USB port, not a hub; run `astro-ingest` again |
 | Ingest copies from the wrong place, or finds nothing | `ASTRO_SOURCE` set in the config | Comment it out so the Seestar is auto-detected |
 | Siril: `requires 1.4.0` fails | Ubuntu's apt Siril (1.4.0-rc2) is running | Remove the apt package; use the Flatpak |

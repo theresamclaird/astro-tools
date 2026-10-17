@@ -17,8 +17,8 @@ step. This README is the reference for each command.
 ## Install
 
 ```bash
-git clone git@github.com:theresamclaird/astro-tools.git ~/Projects/astro-tools
-cd ~/Projects/astro-tools
+git clone git@github.com:theresamclaird/astro-tools.git ~/Projects/theresamclaird/astro-tools
+cd ~/Projects/theresamclaird/astro-tools
 ./install.sh
 ```
 
