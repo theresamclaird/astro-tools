@@ -9,6 +9,11 @@ The basic idea is that **raw data is collected over many nights and never
 changes**, while processing can be repeated whenever you like. The tools keep
 those two things separate.
 
+**New here, or coming back after a while?** [PIPELINE.md](PIPELINE.md) is the
+step-by-step manual: ingest → back up → check frame quality → stack → process
+in Siril → finish in Photoshop, with the exact commands and settings for each
+step. This README is the reference for each command.
+
 ## Install
 
 ```bash
