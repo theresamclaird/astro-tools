@@ -384,7 +384,8 @@ def main():
     manifest = os.path.join(a.archive, "MANIFEST.sha256")
     failed, done, done_b = [], 0, 0
     touched = set()
-    start = datetime.datetime.now()
+    start = last_report = datetime.datetime.now()
+    streak = 0  # consecutive failures; a long run means the source has gone away
     with open(manifest, "a", encoding="utf-8") as mf:
         for src, dst in todo:
             try:
@@ -394,12 +395,20 @@ def main():
                 done += 1
                 done_b += os.path.getsize(src)
                 touched.add(dst.split("/")[1])
+                streak = 0
             except Exception as e:  # keep going; report at the end
                 failed.append((src, str(e)))
-            if done and done % 250 == 0:
-                el = (datetime.datetime.now() - start).total_seconds()
-                print("  %s  %d / %d  (%.1f GiB, %.0f MB/s)" % (datetime.datetime.now().strftime("%H:%M:%S"),
-                      done, len(todo), done_b / GiB, done_b / 1e6 / max(el, 1)))
+                streak += 1
+                if streak >= 20:
+                    print("\n20 files in a row failed; the source seems to be disconnected. Stopping.", flush=True)
+                    break
+            now = datetime.datetime.now()
+            if (now - last_report).total_seconds() >= 30 or done == len(todo):
+                last_report = now
+                el = (now - start).total_seconds()
+                print("  %s  %d / %d  (%.1f GiB, %.0f MB/s%s)" % (now.strftime("%H:%M:%S"),
+                      done, len(todo), done_b / GiB, done_b / 1e6 / max(el, 1),
+                      ", %d failed so far" % len(failed) if failed else ""), flush=True)
     for t in sorted(touched):
         try:
             refresh_notes(a.archive, t)
