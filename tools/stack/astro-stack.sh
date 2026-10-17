@@ -19,7 +19,9 @@
 #
 # Pipeline. Nights are grouped, in date order, into batches of at most
 # --batch-max frames. For each batch:
-#   symlink the raw frames (read in place, never modified)
+#   copy the batch's raw frames to the scratch disk, one file at a time (Siril
+#   reads with many threads at once; on a USB hard drive those scattered reads
+#   are several times slower than one sequential copy). The archive is only read.
 #   -> debayer to 16-bit files -> plate-solve every frame (install Siril's local
 #      Gaia catalogue: much faster, and immune to online-catalogue outages)
 #   -> check the solve produced registration data (stop if not; nothing deleted)
@@ -97,7 +99,7 @@ NBATCH=$nb
 # Space, per batch (batches run one after another and clean up after
 # themselves): 16-bit debayered frames ~50 MB each, plus registered frames on
 # the mosaic canvas (larger, ~100+ MB; ~80% survive the filters).
-NEED_GB=$(( BIGGEST * 50 / 1024 + BIGGEST * 80 / 100 * 110 / 1024 ))
+NEED_GB=$(( BIGGEST * 19 / 1024 + BIGGEST * 50 / 1024 + BIGGEST * 80 / 100 * 110 / 1024 ))
 mkdir -p "$WORK_ROOT" 2>/dev/null || true
 FREE_GB=$(( $(df -Pk "$WORK_ROOT" | awk 'NR==2{print $4}') / 1024 / 1024 ))
 echo
@@ -150,7 +152,8 @@ for b in $(seq 1 "$NBATCH"); do
   for i in "${!SEL[@]}"; do
     [ "${BATCH[$i]}" = "$b" ] || continue
     echo "  $(basename "${SEL[$i]}")  ${CNT[$i]} frames"
-    find "${SEL[$i]}" -maxdepth 1 -name '*.fit' -exec ln -s {} "$B/links/" \;
+    # cp -n never overwrites; the archive copy is only read.
+    find "${SEL[$i]}" -maxdepth 1 -name '*.fit' -print0 | sort -z | xargs -0 sh -c 'cp -n "$@" "$0"' "$B/links/"
     bcount=$((bcount + CNT[i]))
   done
 
@@ -164,8 +167,10 @@ calibrate light -debayer
 seqplatesolve pp_light
 close
 EOF
+  echo "  copied $(ls "$B/links" | wc -l | tr -d ' ') raw frames to scratch ($(date +%T))"
   echo "  1/3 debayer + plate-solve ($(date +%T))"
   siril -d "$B/links" -s "$B/solve.ssf"
+  rm -rf "$B/links"                       # the scratch copies of the raw frames
   solved=$(reg_count "$B/work" pp_light)
   if [ "$solved" -eq 0 ]; then
     echo "Plate-solving left no registration data in $B/work/pp_light_.seq."
