@@ -64,6 +64,7 @@ astro-backup             # mirror the archive to the NAS and verify
 | `astro-ingest` | Files new Seestar output into the archive by target and night, verifies every copy, updates `MANIFEST.sha256` and each target's `notes.md` |
 | `astro-backup` | Copies the archive to the NAS over SSH (or to a mounted share), never deleting there, then verifies the NAS copy against `MANIFEST.sha256` and repairs bad copies from the archive |
 | `astro-stack` | Stacks every night of one target from the archive with Siril: plate-solves each frame, registers onto the full mosaic canvas, stacks, and writes the result to the target's `processing/` folder |
+| `astro-frame-stats` | Measures every frame of one night (sharpness, roundness, background, star count, by mosaic panel), shows what each filter cut would drop, and optionally stacks the night with several filters to compare |
 | `seestar-split-panels` | Groups a mosaic's subs into one folder per panel by clustering their RA/Dec |
 | `seestar-reject-frames` | Finds and sets aside frames spoiled by an obstruction (e.g. a lit tree branch) |
 | `seestar-stack-panels` | Stacks each panel into a master with Siril |
@@ -211,6 +212,33 @@ frames it stacked (for weighting). The file is copied, not moved.
 - Needs Siril 1.4+: `siril-cli` on the PATH, `/Applications/Siril.app`, or the
   Flatpak (`org.siril.Siril`), which must be allowed to see the archive and
   scratch disk: `flatpak override --user --filesystem=/run/media/$USER --filesystem=/data org.siril.Siril`.
+
+### astro-frame-stats
+
+```
+astro-frame-stats TARGET NIGHT [--compare] [--variants LIST] [--crop X,Y,W,H] [--work DIR] [--dry-run]
+```
+
+Use it to choose frame-filter settings from data instead of a fixed percentage.
+It debayers and plate-solves one night exactly as `astro-stack` does, then
+writes to `Targets/<target>/processing/frame-stats/<night>/`:
+
+- `frames.csv`: every frame's time, mosaic panel, FWHM, weighted FWHM,
+  roundness, sky background and star count, as measured by Siril;
+- `summary.txt`: the spread of each measure, robust outliers (more than
+  3 sigma from the median), how many frames 90/75/60% cuts drop, and the same
+  per panel, so a background cut that only removes one panel's (brighter) sky
+  shows up;
+- `frames_over_time.png`, `histograms.png`: the measures over the night,
+  coloured by panel, with the cut lines.
+
+`--compare` then registers and stacks the night once per variant (`all`,
+`current` = astro-stack's filter, `wfwhm75`, `wfwhm60`, `outliers`), measures
+star FWHM and background noise in the same crop of each, saves a same-stretch
+JPG of each crop, and writes `comparison.txt`. Each variant takes a full
+register + stack of the night, so start with a smaller night. Re-running
+reuses the debayered frames and finished stacks. The scratch folder is printed
+at the end; delete it when you're done.
 
 ### Mosaics
 

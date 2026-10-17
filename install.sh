@@ -28,6 +28,7 @@ COMMANDS="
 astro-ingest|py|tools/ingest.py
 astro-backup|bash|tools/backup-to-nas.sh
 astro-stack|bash|tools/stack/astro-stack.sh
+astro-frame-stats|py|tools/stack/frame_stats.py
 seestar-split-panels|py|tools/mosaic/seestar_split_panels.py
 seestar-stack-panels|py|tools/mosaic/seestar_stack_panels.py
 seestar-prep-panels|py|tools/mosaic/seestar_prep_panels.py
@@ -45,19 +46,19 @@ if [ "$UNINSTALL" -eq 1 ]; then
   exit 0
 fi
 
-# ---- Python: a private venv with numpy (the mosaic tools need it) ----
+# ---- Python: a private venv with numpy (mosaic tools) and matplotlib (astro-frame-stats plots) ----
 command -v python3 >/dev/null || { echo "python3 not found. On macOS: xcode-select --install; on Ubuntu: sudo apt install python3 python3-venv"; exit 1; }
 PY="$REPO/.venv/bin/python"
 if [ ! -x "$PY" ]; then
   echo "Creating Python environment in $REPO/.venv"
   python3 -m venv "$REPO/.venv" || { echo "Could not create the venv. On Ubuntu: sudo apt install python3-venv"; exit 1; }
 fi
-if ! "$PY" -c 'import numpy' 2>/dev/null; then
-  echo "Installing numpy into the environment"
+if ! "$PY" -c 'import numpy, matplotlib' 2>/dev/null; then
+  echo "Installing numpy and matplotlib into the environment"
   "$PY" -m pip install --quiet --upgrade pip >/dev/null 2>&1 || true
   if ! "$PY" -m pip install --quiet -r "$REPO/requirements.txt"; then
-    echo "WARNING: could not install numpy. astro-ingest and astro-backup will work;"
-    echo "         the seestar-* mosaic tools need numpy. Re-run ./install.sh when online."
+    echo "WARNING: could not install numpy/matplotlib. astro-ingest and astro-backup will work;"
+    echo "         the seestar-* mosaic tools need numpy; astro-frame-stats needs matplotlib for its plots. Re-run ./install.sh when online."
   fi
 fi
 
