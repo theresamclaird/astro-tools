@@ -44,7 +44,10 @@ ASTRO_NAS=atlas:/volume1/homes/theresa/Astrophotography # where astro-backup cop
 ASTRO_SOURCE=/Volumes/Seestar/MyWorks                   # where astro-ingest looks when no SOURCE is given
 ```
 
-Environment variables of the same names override the file.
+Environment variables of the same names override the file. If `ASTRO_ARCHIVE` /
+`ASTRO_SOURCE` aren't set, the tools look for a drive named `Astro` and a
+`MyWorks` folder under `/Volumes` (macOS), `/run/media/$USER` or `/media/$USER`
+(Linux), and GNOME network mounts (`/run/user/<uid>/gvfs`).
 
 ## The nightly routine
 

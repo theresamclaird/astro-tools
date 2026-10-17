@@ -6,7 +6,10 @@ Ingest new Seestar data into the Astro archive.
 
 SOURCE is a Seestar "MyWorks" folder, or any folder containing Seestar output
 (the telescope's storage, a copy on another drive, ...). Subfolders are searched.
-With no SOURCE, $ASTRO_SOURCE is used (default /Volumes/Seestar/MyWorks).
+With no SOURCE, $ASTRO_SOURCE is used, else the first MyWorks folder found on a
+mounted drive or network share (macOS /Volumes, Linux /run/media/$USER, /media/$USER,
+or a GNOME network mount). The archive likewise defaults to $ASTRO_ARCHIVE, else a
+mounted drive named Astro.
 
 What it does
   * Light frames   -> Targets/<target>/raw/<evening-date>_<scope>[_mosaic]_<filter>/
@@ -33,10 +36,37 @@ Target names
   named after the catalog id is created; you can rename it to add a common name
   (keep the catalog prefix, e.g. NGC7331 -> NGC7331_Deer-Lick-Galaxy).
 """
-import argparse, collections, datetime, hashlib, os, re, shutil, sys
+import argparse, collections, datetime, getpass, glob, hashlib, os, re, shutil, sys
 
-ARCHIVE_DEFAULT = os.environ.get("ASTRO_ARCHIVE", "/Volumes/Astro")
-SOURCE_DEFAULT = os.environ.get("ASTRO_SOURCE", "/Volumes/Seestar/MyWorks")
+
+def _mount_roots():
+    """Where removable drives appear: macOS, then Linux (udisks, then older /media)."""
+    user = os.environ.get("USER") or getpass.getuser()
+    return ["/Volumes", "/run/media/%s" % user, "/media/%s" % user]
+
+
+def _find_archive():
+    for root in _mount_roots():
+        p = os.path.join(root, "Astro")
+        if os.path.isfile(os.path.join(p, "MANIFEST.sha256")):
+            return p
+    return "/Volumes/Astro"
+
+
+def _find_source():
+    """The Seestar's MyWorks folder: over USB it mounts like a drive; over the
+    network GNOME mounts its share under /run/user/<uid>/gvfs/."""
+    pats = [os.path.join(r, "*", "MyWorks") for r in _mount_roots()]
+    pats.append("/run/user/%d/gvfs/*/MyWorks" % os.getuid())
+    for pat in pats:
+        hits = sorted(glob.glob(pat))
+        if hits:
+            return hits[0]
+    return "/Volumes/Seestar/MyWorks"
+
+
+ARCHIVE_DEFAULT = os.environ.get("ASTRO_ARCHIVE") or _find_archive()
+SOURCE_DEFAULT = os.environ.get("ASTRO_SOURCE") or _find_source()
 
 ALIASES = {  # Seestar object name -> catalog id used for folder matching
     "C 12": "NGC 6946", "C 19": "IC 5146", "C 20": "NGC 7000", "C 23": "NGC 891",

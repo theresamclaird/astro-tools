@@ -4,16 +4,25 @@
 # Usage: astro-backup [destination]
 #   destination (default $ASTRO_NAS) is either
 #     host:/path   over SSH (recommended; host is an ~/.ssh/config alias, key login required), or
-#     /local/path  a mounted share, e.g. /Volumes/home/Astrophotography
+#     /local/path  a mounted share or drive, e.g. /Volumes/home/Astrophotography or
+#                  /run/media/$USER/T9/Astro-mirror
 set -u
 case "${1:-}" in -h|--help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;; -*) echo "unknown option: $1 (try --help)"; exit 1 ;; esac
 
-# Keep the Mac awake for the whole run (a sleeping Mac drops network connections).
-if [ -z "${ASTRO_CAFFEINATED:-}" ] && command -v caffeinate >/dev/null 2>&1; then
-  export ASTRO_CAFFEINATED=1; exec caffeinate -i /bin/bash "$0" "$@"
+# Keep the machine awake for the whole run (a sleeping machine drops network connections).
+if [ -z "${ASTRO_CAFFEINATED:-}" ]; then
+  export ASTRO_CAFFEINATED=1
+  if command -v caffeinate >/dev/null 2>&1; then exec caffeinate -i /bin/bash "$0" "$@"
+  elif command -v systemd-inhibit >/dev/null 2>&1 && systemd-inhibit --what=sleep true >/dev/null 2>&1; then
+    exec systemd-inhibit --what=sleep:idle --who=astro-backup --why="backing up the Astro archive" /bin/bash "$0" "$@"
+  fi
 fi
 
-SRC="${ASTRO_ARCHIVE:-/Volumes/Astro}"
+# The archive: $ASTRO_ARCHIVE, else wherever a drive named Astro is mounted (macOS or Linux).
+if [ -n "${ASTRO_ARCHIVE:-}" ]; then SRC="$ASTRO_ARCHIVE"
+else SRC=/Volumes/Astro
+  for c in "/run/media/$USER/Astro" "/media/$USER/Astro"; do [ -f "$c/MANIFEST.sha256" ] && { SRC="$c"; break; }; done
+fi
 DST="${1:-${ASTRO_NAS:-/Volumes/home/Astrophotography}}"
 [ -f "$SRC/MANIFEST.sha256" ] || { echo "Astro drive not mounted (no $SRC/MANIFEST.sha256)"; exit 1; }
 mkdir -p "$SRC/_tools/logs"
@@ -23,7 +32,10 @@ echo "=== $(date) backup $SRC -> $DST"
 
 EXCLUDES=(.Spotlight-V100 .fseventsd .Trashes .DS_Store '._*' '*.partial' 'System Volume Information' '$RECYCLE.BIN' _tools/logs)
 NEED=$(du -sk "$SRC/Targets" "$SRC/_tools" | awk '{s+=$1} END{printf "%d", s/1024/1024}')
-sha() { shasum -a 256 "$1" 2>/dev/null | cut -c1-64; }
+# GNU (Linux) and BSD (macOS) tools differ; these work on both.
+if command -v sha256sum >/dev/null 2>&1; then SHA256=(sha256sum); else SHA256=(shasum -a 256); fi
+sha() { "${SHA256[@]}" "$1" 2>/dev/null | cut -c1-64; }
+fsize() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1"; }
 manifest_sha() { grep -F "  $1" "$SRC/MANIFEST.sha256" | awk -v p="$1" 'substr($0,67)==p{print substr($0,1,64); exit}'; }
 
 case "$DST" in
@@ -107,12 +119,12 @@ else
   i=0; copied=0; skipped=0; failed=0
   while IFS= read -r -d '' f; do
     f="${f#./}"; s="$SRC/$f"; d="$DST/$f"; i=$((i+1))
-    if [ -f "$d" ] && [ "$(stat -f %z "$s")" = "$(stat -f %z "$d")" ] && ! [ "$s" -nt "$d" ]; then
+    if [ -f "$d" ] && [ "$(fsize "$s")" = "$(fsize "$d")" ] && ! [ "$s" -nt "$d" ]; then
       skipped=$((skipped+1))
     else
       mkdir -p "$(dirname "$d")"
       if { cp -p "$s" "$d.partial" 2>/dev/null || cp "$s" "$d.partial"; } && \
-         [ "$(stat -f %z "$s")" = "$(stat -f %z "$d.partial")" ] && mv -f "$d.partial" "$d"; then
+         [ "$(fsize "$s")" = "$(fsize "$d.partial")" ] && mv -f "$d.partial" "$d"; then
         copied=$((copied+1))
       else
         echo "COPY FAILED: $f"; failed=$((failed+1))
@@ -128,7 +140,7 @@ else
   TOTAL=$(wc -l < "$DST/MANIFEST.sha256" | tr -d ' ')
   echo "=== $(date +%H:%M:%S) verifying $TOTAL files on the NAS (reads the whole archive over the network)"
   FAILED="$(mktemp)"
-  ( cd "$DST" && shasum -a 256 -c MANIFEST.sha256 2>/dev/null | grep -v ': OK$' ) > "$FAILED"
+  ( cd "$DST" && "${SHA256[@]}" -c MANIFEST.sha256 2>/dev/null | grep -v ': OK$' ) > "$FAILED"
   nas_sha() { sha "$DST/$1"; }
   put() { mkdir -p "$(dirname "$DST/$1")" && cp -p "$SRC/$1" "$DST/$1.partial" && mv -f "$DST/$1.partial" "$DST/$1"; }
 fi
