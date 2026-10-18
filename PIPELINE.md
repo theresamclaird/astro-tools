@@ -8,22 +8,22 @@ are in the [README](README.md); this is the order to use them in.
 Every session goes through the same six steps, in order. Raw data never changes once it's archived; everything after step 2 can be redone at any time from `raw/`.
 
 1. **Ingest:** `astro-ingest` copies the night off the Seestar into the Astro drive and verifies every file.
-2. **Back up:** `astro-backup` mirrors the archive to the T9 and the NAS. Clear the Seestar only after this.
+2. **Back up:** `astro-backup` mirrors the archive to a second drive and the NAS. Clear the Seestar only after this.
 3. **Check frame quality** (optional, when trying new settings): `astro-frame-stats` measures every frame of one night and compares filter cut-offs.
 4. **Stack:** `astro-stack` stacks every night of a target into one 32-bit linear image. It reuses earlier batches, so only new nights are processed.
 5. **Process in Siril:** crop, background extraction, plate-solve, colour calibration (SPCC), GHS stretch, export a 16-bit TIFF.
 6. **Finish in Photoshop** on the Mac: StarXTerminator, then final adjustments on the starless layer.
 
-All commands run on Prometheus (Ubuntu) unless noted. Every command takes `--help`, and every one that changes something takes `--dry-run`.
+All commands run on the Linux workstation (Ubuntu) unless noted; on macOS the drives are under `/Volumes/` instead. Every command takes `--help`, and every one that changes something takes `--dry-run`.
 
 ### Drives and folders
 
-| What | Where on Prometheus | Notes |
+| What | Example path (Linux) | Notes |
 | --- | --- | --- |
-| Archive (Astro, 6 TB WD) | `/run/media/theresa/Astro` | The one true copy. `raw/`, `final/`, `notes.md` are irreplaceable |
+| Archive drive (named Astro) | `/run/media/$USER/Astro` | The one true copy. `raw/`, `final/`, `notes.md` are irreplaceable |
 | Scratch | `/data/astro-work` | Intermediates from stacking; safe to delete after a run |
-| T9 mirror | `/run/media/theresa/T9/Astro-mirror` | Second copy; must be exFAT to move between Mac and Linux |
-| NAS (Atlas) | `atlas:/volume1/homes/theresa/Astrophotography` | Third copy, over SSH |
+| Mirror drive | `/run/media/$USER/T9/Astro-mirror` | Second copy; must be exFAT to move between Mac and Linux |
+| NAS | `nas:/volume1/homes/youruser/Astrophotography` | Third copy, over SSH |
 | Seestar | Auto-detected `MyWorks` folder | Plug into a rear-panel USB port, not a hub |
 | Tools | `~/Projects/theresamclaird/astro-tools` | `git pull` updates every command |
 
@@ -33,17 +33,17 @@ Inside the archive, each target has `raw/<night>/` (light frames), `seestar-stac
 
 - [ ] Clone and install: `git clone https://github.com/theresamclaird/astro-tools.git ~/Projects/theresamclaird/astro-tools && cd ~/Projects/theresamclaird/astro-tools && ./install.sh`
 - [ ] Make sure `~/.local/bin` is on the PATH in both `~/.bashrc` and `~/.zshrc`.
-- [ ] Edit `~/.config/astro-tools/config`: `ASTRO_ARCHIVE=/run/media/theresa/Astro`, `ASTRO_WORK=/data/astro-work`, `ASTRO_NAS=atlas:/volume1/homes/theresa/Astrophotography`. Leave `ASTRO_SOURCE` commented out so the Seestar is found automatically.
+- [ ] Edit `~/.config/astro-tools/config`: `ASTRO_ARCHIVE=/run/media/$USER/Astro`, `ASTRO_WORK=/data/astro-work`, `ASTRO_NAS=nas:/volume1/homes/youruser/Astrophotography`. Leave `ASTRO_SOURCE` commented out so the Seestar is found automatically.
 - [ ] Install Siril 1.4+ from Flatpak (`flatpak install flathub org.siril.Siril`), not apt. Ubuntu's package is a release candidate the scripts reject.
-- [ ] Let the Flatpak see the drives: `flatpak override --user --filesystem=/run/media/theresa --filesystem=/data org.siril.Siril`
+- [ ] Let the Flatpak see the drives: `flatpak override --user --filesystem=/run/media/$USER --filesystem=/data org.siril.Siril`
 - [ ] Install the local Gaia catalogue: `siril_cat_healpix8_astro.dat` in `~/.var/app/org.siril.Siril/data/siril/`, set in Siril under Preferences → Astrometry. Plate-solving then takes minutes instead of hours and doesn't depend on the online server.
 
 ## Step 1: Ingest a night
 
 `astro-ingest` files everything new on the Seestar into the archive by target and night, then reads each copy back and checks it by SHA-256. It never changes the Seestar and never overwrites a different file in the archive.
 
-1. Connect the Seestar by USB to a **rear-panel port** on Prometheus. Through the hub it drops out with I/O errors; on the rear port it copies at about 25–28 MB/s.
-2. Plug in the Astro drive. Both should appear on their own under `/run/media/theresa/`.
+1. Connect the Seestar by USB to a **rear-panel port** on the computer. Through a USB hub it drops out with I/O errors; on the rear port it copies at about 25–28 MB/s.
+2. Plug in the Astro drive. Both should appear on their own under `/run/media/$USER/`.
 3. Preview what will be copied and where:
 
    ```bash
@@ -71,12 +71,12 @@ What else it does:
 
 ## Step 2: Back up
 
-`astro-backup` copies the archive to a destination, never deletes anything there, then verifies the copy against `MANIFEST.sha256` and recopies any file that fails. Run it to the T9 and to the NAS after every ingest.
+`astro-backup` copies the archive to a destination, never deletes anything there, then verifies the copy against `MANIFEST.sha256` and recopies any file that fails. Run it to the mirror drive and to the NAS after every ingest.
 
-**To the T9** (a mounted drive, verified by reading every file back):
+**To a mirror drive** (a mounted drive, here a Samsung T9, verified by reading every file back):
 
 ```bash
-astro-backup /run/media/theresa/T9/Astro-mirror
+astro-backup /run/media/$USER/T9/Astro-mirror
 ```
 
 **To the NAS** (over SSH; the NAS checks its own copy, so nothing is read back over the network):
@@ -92,7 +92,7 @@ astro-backup            # uses ASTRO_NAS from the config
 
 **When both backups report success, clear the night from the Seestar.** Its storage is not a backup.
 
-The NAS backup still drops its network connection partway through long runs. Until that's fixed, the T9 is the backup to rely on; let the NAS run retry and check its log.
+If the NAS connection drops partway through a long run, the backup retries; if it gives up, just run it again. Keep a local mirror drive as well, so you're never relying on the network alone.
 
 ## Step 3: Check frame quality (optional)
 
@@ -196,9 +196,9 @@ The masters are then plate-solved, registered together, and averaged, weighted b
 
 A stored master is reused only if every night in it still has the same frame count and the settings haven't changed. Outdated masters stay in `batch-masters/` until you delete them.
 
-### One time: adopt the first full stack's masters
+### Example: adopting masters from before the store existed
 
-The masters from the 2026-10-16 run predate the store. Adopt them once, so they aren't restacked:
+If you stacked before incremental mode existed, adopt those masters once. In this example, the masters from an October 2026 M31 run predate the store. Adopt them once, so they aren't restacked:
 
 ```bash
 W=/data/astro-work/M31_Andromeda-Galaxy_2026-10-16_siril-all/masters
@@ -265,7 +265,7 @@ These still expect the old Seestar folder layout (`<Target>_mosaic_sub`) rather 
 | Ingest stalls or stops after 20 failures | The Seestar's USB connection reset | Use a rear-panel USB port, not a hub; run `astro-ingest` again |
 | Ingest copies from the wrong place, or finds nothing | `ASTRO_SOURCE` set in the config | Comment it out so the Seestar is auto-detected |
 | Siril: `requires 1.4.0` fails | Ubuntu's apt Siril (1.4.0-rc2) is running | Remove the apt package; use the Flatpak |
-| Siril can't see the drive's files | Flatpak sandbox | `flatpak override --user --filesystem=/run/media/theresa --filesystem=/data org.siril.Siril` |
+| Siril can't see the drive's files | Flatpak sandbox | `flatpak override --user --filesystem=/run/media/$USER --filesystem=/data org.siril.Siril` |
 | Plate-solving takes hours or fails with 503 errors | Using the online catalogue | Install the local Gaia catalogue (Overview → One-time setup) |
 | "no registration data" after plate-solving | Solve failed, or a single-file (FITSEQ) sequence | Check the local catalogue path; the tools always use separate files |
 | Siril refuses more than 10,000 files | Siril's sequence limit | Keep `--batch-max` at 9,000 or less |
@@ -273,6 +273,6 @@ These still expect the old Seestar folder layout (`<Target>_mosaic_sub`) rather 
 | GHS turns everything white | Symmetry point wrong, or AutoStretch display still on | Display mode Linear; type SP just above the sky peak |
 | Stretched image is grey; saturation does nothing | Grey offset from "scaling to [0,1]" after background extraction | Reopen `M31_spcc.fit`; black point with Independent channel values before the main stretch (Step 5, 6.1) |
 | Dry run restacks nights you expected reused | A night's frame count changed, or settings changed | Expected; the old master stays in `batch-masters/` until deleted |
-| NAS backup drops partway | Network loss to Atlas (unsolved) | Re-run; it resumes. Rely on the T9 meanwhile |
+| NAS backup drops partway | The network connection to the NAS dropped | Re-run; it resumes. Keep a local mirror drive as well |
 
 Every long run writes a log: `astro-stack.log` in the result folder, `frame-stats.log` in its scratch folder, and the backup logs in `Astro/_tools/logs/`. Start there when something fails.

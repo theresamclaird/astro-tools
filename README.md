@@ -5,6 +5,18 @@ on macOS and Linux: getting each night's data off the telescope into a well-orga
 archive, backing that archive up, and turning mosaics into finished stacks with
 [Siril](https://siril.org).
 
+> **About this repo.** I took up astrophotography recently with a Seestar S50
+> smart telescope, and quickly found that the hard part wasn't capturing data,
+> it was keeping track of it: a few weeks of clear nights produced tens of
+> thousands of frames across a handful of targets. These are the tools I put
+> together to turn that into a simple pipeline: get each night off the telescope
+> into an organized archive, back it up and verify it, stack every night of a
+> target into one image with Siril, and process the result. If you've recently
+> fallen into this hobby too, I hope they save you some time, or at least give you
+> ideas for your own setup. They're built around my gear (a Seestar, Linux and
+> macOS, a Synology NAS), so expect to adjust paths and settings.
+> [PIPELINE.md](PIPELINE.md) walks through the whole process step by step.
+
 The basic idea is that **raw data is collected over many nights and never
 changes**, while processing can be repeated whenever you like. The tools keep
 those two things separate.
@@ -35,9 +47,12 @@ cd ~/Projects/theresamclaird/astro-tools
 
 `./install.sh --uninstall` removes the wrappers.
 
-**Requirements:** macOS, `python3` (from the Xcode command-line tools:
-`xcode-select --install`), and for the stacking/mosaic tools Siril 1.4+
-(`/Applications/Siril.app` is detected automatically).
+**Requirements:** macOS or Linux (developed on Ubuntu 26.04), `python3`
+(macOS: `xcode-select --install`; Ubuntu: `sudo apt install python3 python3-venv`),
+and for the stacking and mosaic tools Siril 1.4+. Siril is found as `siril-cli`
+on the PATH, `/Applications/Siril.app` on macOS, or the Flatpak
+(`org.siril.Siril`) on Linux. Ubuntu's own Siril package may be too old; use the
+Flatpak.
 
 ## Configuration
 
@@ -45,7 +60,7 @@ cd ~/Projects/theresamclaird/astro-tools
 
 ```bash
 ASTRO_ARCHIVE=/Volumes/Astro                            # the archive drive
-ASTRO_NAS=atlas:/volume1/homes/theresa/Astrophotography # where astro-backup copies it (host:/path over SSH, or a mounted folder)
+ASTRO_NAS=nas:/volume1/homes/youruser/Astrophotography # where astro-backup copies it (host:/path over SSH, or a mounted folder)
 ASTRO_SOURCE=/Volumes/Seestar/MyWorks                   # where astro-ingest looks when no SOURCE is given
 ```
 
@@ -150,14 +165,14 @@ Then, on the Mac:
 
 ```bash
 [ -f ~/.ssh/id_ed25519.pub ] || ssh-keygen -t ed25519
-ssh-copy-id theresa@atlas.local
+ssh-copy-id youruser@nas.local
 # DSM home folders are often too permissive for sshd to accept keys:
-ssh theresa@atlas.local 'chmod 755 ~ && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'
-printf '\nHost atlas\n  HostName atlas.local\n  User theresa\n' >> ~/.ssh/config
-ssh atlas echo ok          # must print "ok" without asking for a password
+ssh youruser@nas.local 'chmod 755 ~ && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'
+printf '\nHost nas\n  HostName nas.local\n  User youruser\n' >> ~/.ssh/config
+ssh nas echo ok          # must print "ok" without asking for a password
 ```
 
-and set `ASTRO_NAS=atlas:/volume1/homes/theresa/Astrophotography` in
+and set `ASTRO_NAS=nas:/volume1/homes/youruser/Astrophotography` in
 `~/.config/astro-tools/config`.
 
 If the copy step misbehaves with macOS's built-in rsync (openrsync), install the
@@ -302,3 +317,7 @@ stack was made; see `siril/examples/m31_week.ssf` and `run_m31_week.sh`.
 ```bash
 python3 -m unittest discover tests
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
