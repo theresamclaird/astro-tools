@@ -218,12 +218,12 @@ The stack is linear and looks almost black until it's stretched. Work in this or
 3. **Remove the background gradient.** Image Processing → Background Extraction. Polynomial, degree 2, correction **Subtraction**. Generate the samples, then right-click to remove any that sit on the galaxy or its faint halo. Compute, check the result, Apply. Save as `M31_bg.fit`.
 4. **Plate-solve.** Tools → Astrometry → Image Plate Solver. Search for M31, then Solve; the local catalogue makes this quick. Rotation and cropping discard the solution, so this step is always needed before colour calibration.
 5. **Calibrate colour (SPCC).** Image Processing → Colour Calibration → Spectrophotometric Colour Calibration. Sensor: ZWO Seestar S50. Filter: **UV/IR Block**, because the frames were shot through the IR-cut filter. White reference: **Average Spiral Galaxy**. Apply and check the log: about 2,000 stars matched last time. Save as `M31_spcc.fit`.
-6. **Stretch with GHS.** Image Processing → Stretches → Generalised Hyperbolic Stretch, colour model **Human weighted luminance**. Switch the display mode to **Linear** first, so you see the real result.
-    1. First pass: use the eyedropper on the background to set the symmetry point (SP, about 0.07). Stretch factor D = 3, local intensity b = 6. Apply.
-    2. Shift the black point up until the histogram's left edge just clears zero (about 0.27–0.32). Apply.
-    3. Second pass, gentler: D = 1, b = 3, SP = 0.17, shadow protection LP = 0.12, highlight protection HP ≈ 0.9. Apply, then a small black-point shift (about 0.14).
-    4. Aim for a dark grey sky, not black, with the core not clipped. If everything turns white, SP is too low: use the eyedropper again. Save as `M31_stretched.fit`.
-7. **Saturation.** Image Processing → Colour Saturation, amount 0.3–0.5. Optionally Remove Green Noise (SCNR) if the background looks green. Save as `M31_final_siril.fit`.
+6. **Stretch with GHS.** Image Processing → Stretches → Generalised Hyperbolic Stretch. Switch the display mode to **Linear** first (close the dialog if the dropdown is greyed out), so the preview isn't auto-stretched on top. Linear data looks black on screen; that's expected.
+    1. **Remove the pedestal, per channel.** Type of stretch **Linear stretch (BP shift)**, colour model **Independent channel values**. Zoom the histogram (type 10 in the box above it) and set the black point just left of the sky peak, with shadow clip near 0. Apply. This matters most when the console has said *"Marginally out of range pixels detected: scaling to [0,1]"*: background extraction left pixels below zero, Siril shifted the whole image up, and that grey offset washes the colour out of everything after it. (October 2026 stack: sky at 0.07, black point 0.070.)
+    2. **Main stretch.** Type **Generalised hyperbolic transform**, colour model **Human weighted luminance**. Set SP just above the sky by typing it (about 0.005 after step 1; the eyedropper can give nonsense values here). D = 3, b = 6, LP = 0, HP = 0.95. Aim for roughly what the AutoStretch display shows: dark sky, warm core, core not a white blob. Too bright: lower D. Too dim: raise D, or apply and do a second smaller pass. Apply.
+    3. **Darken the sky.** Linear stretch (BP shift), Human weighted luminance, black point until the sky sits around 0.08–0.12, shadow clip under about 0.1%. Toggle Preview to check the faint halo doesn't shrink. Apply. (October 2026: BP 0.091.)
+    4. Skip extra brightening passes here: they bloat the stars. Stretch the galaxy further in Photoshop after StarXTerminator. Save as `M31_stretched.fit`.
+7. **Saturation.** Image Processing → Colour Saturation, amount about 0.5. If even 1.0 barely changes anything, the colour was washed out by a pedestal: go back to `M31_spcc.fit` and redo step 6 from 6.1. Optionally Remove Green Noise (SCNR) if the background looks green. Save as `M31_final_siril.fit`.
 8. **Export for Photoshop.** File → Save As, type **TIFF**, **16-bit**, into `Targets/M31_Andromeda-Galaxy/final/<date>_siril-all/`.
 
 When re-processing a newer stack, repeat from step 1 on the new `_linear.fit`. The settings carry over roughly, but use the eyedropper again: SP depends on the data.
@@ -270,7 +270,8 @@ These still expect the old Seestar folder layout (`<Target>_mosaic_sub`) rather 
 | "no registration data" after plate-solving | Solve failed, or a single-file (FITSEQ) sequence | Check the local catalogue path; the tools always use separate files |
 | Siril refuses more than 10,000 files | Siril's sequence limit | Keep `--batch-max` at 9,000 or less |
 | Plate solution missing after a rotation | Rotating discards the WCS | Plate-solve again before SPCC |
-| GHS turns everything white | Symmetry point too low | Set SP with the eyedropper on the background |
+| GHS turns everything white | Symmetry point wrong, or AutoStretch display still on | Display mode Linear; type SP just above the sky peak |
+| Stretched image is grey; saturation does nothing | Grey offset from "scaling to [0,1]" after background extraction | Reopen `M31_spcc.fit`; black point with Independent channel values before the main stretch (Step 5, 6.1) |
 | Dry run restacks nights you expected reused | A night's frame count changed, or settings changed | Expected; the old master stays in `batch-masters/` until deleted |
 | NAS backup drops partway | Network loss to Atlas (unsolved) | Re-run; it resumes. Rely on the T9 meanwhile |
 
