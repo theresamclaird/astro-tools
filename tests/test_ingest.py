@@ -102,6 +102,36 @@ class IngestTest(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn("Nothing new to ingest", out)
 
+    def queue(self):
+        p = os.path.join(self.arc, "_tools", "stack-queue.tsv")
+        if not os.path.exists(p):
+            return None
+        with open(p) as fh:
+            return fh.read().splitlines()
+
+    def test_stack_queue(self):
+        rc, out = self.run_ingest("--dry-run")
+        self.assertIsNone(self.queue())                     # dry run queues nothing
+        rc, out = self.run_ingest("--yes")
+        self.assertEqual(rc, 0, out)
+        # one line per night that got light frames; seestar-stacks and Moon video aren't queued
+        self.assertEqual(self.queue(), ["M31_Andromeda-Galaxy\t2026-10-11_S50_mosaic_IRCUT",
+                                        "NGC6946_Fireworks-Galaxy\t2026-10-11_S50_IRCUT",
+                                        "NGC7331\t2026-10-11_S30_LP"])
+        self.assertIn("Queued for `astro-stack --changed`", out)
+        # a later frame for an already-queued night isn't queued twice
+        fake_fits(os.path.join(self.src, "M 31_mosaic_sub", "Light_mosaic_M 31_10.0s_IRCUT_20261012-020000.fit"),
+                  "ZWO Seestar S50 Pro")
+        rc, out = self.run_ingest("--yes")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(self.queue()), 3)
+
+    def test_cancel_exits_2(self):
+        p = subprocess.run([sys.executable, INGEST, self.src, "--archive", self.arc], input="n\n",
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        self.assertEqual(p.returncode, 2, p.stdout)
+        self.assertFalse(self.exists("Targets/M31_Andromeda-Galaxy/raw"))
+
     def test_conflict_is_not_overwritten(self):
         dst = os.path.join(self.arc, "Targets/NGC6946_Fireworks-Galaxy/raw/2026-10-11_S50_IRCUT/"
                                      "Light_C 12_10.0s_IRCUT_20261011-210000.fit")

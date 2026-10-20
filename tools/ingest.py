@@ -28,6 +28,15 @@ Safety
   * Each target's notes.md gets its "Raw sessions" table refreshed; everything
     else in notes.md (your own notes) is left untouched.
 
+Stacking queue
+  Every night that received light frames is added to _tools/stack-queue.tsv
+  ("<target folder><TAB><night folder>" per line). `astro-stack --changed`
+  stacks the queued targets and removes what it handled; `astro-nightly` runs
+  ingest, backup and that stack step in one go.
+
+Exit status: 0 done (or nothing new), 1 failures or unresolved conflicts,
+2 cancelled at the confirmation prompt.
+
 Target names
   Seestar names are mapped to archive folders: Caldwell / star-name aliases
   below, then _tools/targets.tsv (optional, "Seestar name<TAB>folder name" per
@@ -256,6 +265,24 @@ def copy_verify(src, dst_full):
     return h.hexdigest()
 
 
+QUEUE = os.path.join("_tools", "stack-queue.tsv")
+
+
+def queue_for_stacking(archive, sessions):
+    """Append (target, night) pairs to the stacking queue, skipping ones already queued."""
+    path = os.path.join(archive, QUEUE)
+    have = set()
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as fh:
+            have = {line.rstrip("\n") for line in fh if line.strip()}
+    add = ["%s\t%s" % ts for ts in sorted(sessions) if "%s\t%s" % ts not in have]
+    if add:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("".join(line + "\n" for line in add))
+    return add
+
+
 NOTES_TEMPLATE = "# {title}\n\n## Raw sessions\n\n## Notes\n\n- \n"
 
 
@@ -377,13 +404,15 @@ def main():
         try:
             if input("\nCopy these into %s? [y/N] " % a.archive).strip().lower() not in ("y", "yes"):
                 print("Cancelled; nothing copied.")
-                return 0
+                return 2
         except EOFError:
-            return 0
+            print("\nCancelled (no answer); nothing copied. Use --yes to skip the question.")
+            return 2
 
     manifest = os.path.join(a.archive, "MANIFEST.sha256")
     failed, done, done_b = [], 0, 0
     touched = set()
+    sessions = set()   # (target, night) pairs that received light frames
     start = last_report = datetime.datetime.now()
     streak = 0  # consecutive failures; a long run means the source has gone away
     with open(manifest, "a", encoding="utf-8") as mf:
@@ -394,7 +423,10 @@ def main():
                 mf.flush()
                 done += 1
                 done_b += os.path.getsize(src)
-                touched.add(dst.split("/")[1])
+                parts = dst.split("/")
+                touched.add(parts[1])
+                if parts[2] == "raw" and len(parts) == 5 and dst.lower().endswith((".fit", ".fits")):
+                    sessions.add((parts[1], parts[3]))
                 streak = 0
             except Exception as e:  # keep going; report at the end
                 failed.append((src, str(e)))
@@ -418,6 +450,12 @@ def main():
     print("\nCopied and verified %d file(s), %.1f GiB." % (done, done_b / GiB))
     if touched:
         print("Updated notes.md for: %s" % ", ".join(sorted(touched)))
+    if sessions:
+        try:
+            queue_for_stacking(a.archive, sessions)
+            print("Queued for `astro-stack --changed`: %s" % ", ".join("%s/%s" % ts for ts in sorted(sessions)))
+        except OSError as e:
+            print("  could not update the stacking queue (%s): %s" % (QUEUE, e))
     if failed:
         print("\nFAILED (%d) - re-run to retry:" % len(failed))
         for s, e in failed:

@@ -4,6 +4,8 @@
 #   astro-stack TARGET [--nights GLOB] [--min-frames N] [--batch-max N] [--work DIR]
 #               [--name NAME] [--rebuild] [--keep] [--dry-run]
 #   astro-stack TARGET --nights GLOB --adopt MASTER.fit [--frames N]
+#   astro-stack --changed [--min-frames N] [--batch-max N] [--work DIR] [--rebuild]
+#               [--keep] [--dry-run]
 #
 #   TARGET        target folder name, or a unique prefix of it (e.g. M31)
 #   --nights      only raw/ folders matching GLOB (default: all), e.g. '2026-10-1*'
@@ -22,6 +24,19 @@
 #   --adopt F     record an existing batch master F (made by this pipeline) as
 #                 covering exactly the nights selected by --nights; --frames N
 #                 is how many frames it stacked (for the README). Then stops.
+#   --changed     stack every target that astro-ingest queued in
+#                 <archive>/_tools/stack-queue.tsv, instead of one TARGET (see below)
+#
+# --changed. astro-ingest queues each night it adds. For every queued target,
+# the queued nights are grouped by scope and filter (e.g. S50_IRCUT), and each
+# group is stacked with all of that target's nights of the same scope and filter,
+# so the result is the target's full stack including the new night. The run is
+# named <today>_siril-all_<scope>_<filter>. Queued nights are dropped with a
+# note, not stacked, when they're Moon/Sun data, have fewer than --min-frames
+# frames, or their folder no longer exists. A group's nights leave the queue
+# once its stack succeeds (or it's dropped); a failed group stays queued for the
+# next run, and the other groups still run. --dry-run shows each group's plan and
+# leaves the queue alone.
 #
 # Incremental. Each batch master is kept in the target's store,
 # Targets/<target>/processing/batch-masters/, with a note of exactly which
@@ -54,12 +69,12 @@
 # The machine is kept awake for the run (systemd-inhibit / caffeinate).
 set -euo pipefail
 
-usage() { sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { awk 'NR>1 && /^set -euo/{exit} NR>1' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 ARCHIVE="${ASTRO_ARCHIVE:-/Volumes/Astro}"
 WORK_ROOT="${ASTRO_WORK:-/data/astro-work}"
 NIGHTS='*'; MIN=50; BMAX=9000; NAME="$(date +%F)_siril-all"; KEEP=0; DRY=0; TARGET=""
-REBUILD=0; ADOPT=""; ADOPT_FRAMES=0
+REBUILD=0; ADOPT=""; ADOPT_FRAMES=0; CHANGED=0; NIGHTS_SET=0; NAME_SET=0
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BM_PY=(python3 "$HERE/batch_masters.py")
 # Anything that changes how a batch master is made goes in here, so masters made
@@ -67,33 +82,109 @@ BM_PY=(python3 "$HERE/batch_masters.py")
 SETTINGS="v1 debayer16 platesolve framing=max filter-wfwhm=90% filter-bkg=90% rej=w3,3 norm=addscale weight=noise"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --nights) NIGHTS="$2"; shift 2 ;;
+    --nights) NIGHTS="$2"; NIGHTS_SET=1; shift 2 ;;
     --min-frames) MIN="$2"; shift 2 ;;
     --batch-max) BMAX="$2"; shift 2 ;;
     --work) WORK_ROOT="$2"; shift 2 ;;
-    --name) NAME="$2"; shift 2 ;;
+    --name) NAME="$2"; NAME_SET=1; shift 2 ;;
     --keep) KEEP=1; shift ;;
     --rebuild) REBUILD=1; shift ;;
     --adopt) ADOPT="$2"; shift 2 ;;
     --frames) ADOPT_FRAMES="$2"; shift 2 ;;
+    --changed) CHANGED=1; shift ;;
     --dry-run|-n) DRY=1; shift ;;
     -h|--help) usage 0 ;;
     -*) echo "unknown option: $1"; usage 1 ;;
     *) [ -z "$TARGET" ] && TARGET="$1" || { echo "only one TARGET"; exit 1; }; shift ;;
   esac
 done
-[ -n "$TARGET" ] || usage 1
+if [ "$CHANGED" -eq 1 ]; then
+  [ -z "$TARGET" ] && [ "$NIGHTS_SET" -eq 0 ] && [ "$NAME_SET" -eq 0 ] && [ -z "$ADOPT" ] || {
+    echo "--changed takes no TARGET, --nights, --name or --adopt (it picks those itself)"; exit 1; }
+else
+  [ -n "$TARGET" ] || usage 1
+fi
 [ "$BMAX" -le 9900 ] || { echo "--batch-max must be at most 9900 (Siril's 10,000-file limit)"; exit 1; }
 [ -d "$ARCHIVE/Targets" ] || { echo "Archive not found: $ARCHIVE/Targets (set ASTRO_ARCHIVE)"; exit 1; }
 
+# The target folder for NAME: exact match, else the one folder with a raw/ that starts with it.
+resolve_target() {
+  local d found="" n=0
+  for d in "$ARCHIVE/Targets/$1"*/; do
+    [ -d "$d/raw" ] || continue
+    found="${d%/}"; n=$((n+1))
+    [ "$(basename "$found")" = "$1" ] && { n=1; break; }
+  done
+  [ "$n" -eq 1 ] && echo "$found"
+}
+
+# ---- --changed: stack every target astro-ingest queued ----
+if [ "$CHANGED" -eq 1 ]; then
+  QUEUE="$ARCHIVE/_tools/stack-queue.tsv"
+  if ! [ -s "$QUEUE" ]; then echo "Nothing queued for stacking ($QUEUE is empty or missing)."; exit 0; fi
+  Q="$(mktemp -d)"; trap 'rm -rf "$Q"' EXIT
+  : > "$Q/cand"; : > "$Q/drop"
+  echo "Queued nights ($QUEUE):"
+  while IFS=$'\t' read -r qt qn; do
+    [ -n "$qt" ] && [ -n "$qn" ] || continue
+    line="$qt"$'\t'"$qn"
+    td="$(resolve_target "$qt" || true)"
+    why=""
+    case "$qt" in Moon|Moon_*|Sun|Sun_*) why="Moon/Sun data isn't stacked by astro-stack" ;; esac
+    if [ -z "$why" ] && [ -z "$td" ]; then why="no unique target folder matching '$qt'"; fi
+    if [ -z "$why" ] && ! [ -d "$td/raw/$qn" ]; then why="night folder not found"; fi
+    if [ -z "$why" ]; then
+      cnt=$(find "$td/raw/$qn" -maxdepth 1 -name '*.fit' | wc -l | tr -d ' ')
+      [ "$cnt" -ge "$MIN" ] || why="$cnt frames (fewer than --min-frames $MIN)"
+    fi
+    if [ -n "$why" ]; then
+      printf '  drop   %s/%s: %s\n' "$qt" "$qn" "$why"
+      printf '%s\n' "$line" >> "$Q/drop"; continue
+    fi
+    key="$(echo "$qn" | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}_//; s/_mosaic//')"   # e.g. S50_IRCUT
+    printf '  stack  %s/%s (%s frames, %s)\n' "$(basename "$td")" "$qn" "$cnt" "$key"
+    printf '%s\t%s\t%s\n' "$(basename "$td")" "$key" "$line" >> "$Q/cand"
+  done < <(sort -u "$QUEUE")
+
+  # Take lines out of the queue, re-reading it so anything queued meanwhile is kept.
+  unqueue() {
+    [ -s "$1" ] || return 0
+    grep -v -x -F -f "$1" "$QUEUE" > "$Q/rest" || true
+    cat "$Q/rest" > "$QUEUE"
+  }
+  [ "$DRY" -eq 1 ] || unqueue "$Q/drop"
+
+  PASS=(--min-frames "$MIN" --batch-max "$BMAX" --work "$WORK_ROOT")
+  [ "$REBUILD" -eq 1 ] && PASS+=(--rebuild)
+  [ "$KEEP" -eq 1 ] && PASS+=(--keep)
+  [ "$DRY" -eq 1 ] && PASS+=(--dry-run)
+  OK=(); FAILED=()
+  # (fd 4, so the stack runs can't read the group list from stdin)
+  while IFS=$'\t' read -r tname key <&4; do
+    scope="${key%%_*}"; filt="${key#*_}"
+    awk -F'\t' -v t="$tname" -v k="$key" '$1==t && $2==k {print $3 "\t" $4}' "$Q/cand" > "$Q/group"
+    echo; echo "=== $tname, $key ==="
+    # All of this target's nights with the same scope and filter, mosaic or not.
+    if /bin/bash "$0" "$tname" --nights "????-??-??_${scope}_*${filt}" \
+         --name "$(date +%F)_siril-all_$key" ${PASS[@]+"${PASS[@]}"}; then
+      OK+=("$tname $key"); [ "$DRY" -eq 1 ] || unqueue "$Q/group"
+    else
+      FAILED+=("$tname $key"); echo "*** $tname $key failed; its nights stay queued."
+    fi
+  done 4< <(cut -f1,2 "$Q/cand" | sort -u)
+  echo
+  [ "$DRY" -eq 1 ] && { echo "(dry run: nothing stacked, queue unchanged)"; exit 0; }
+  [ "${#OK[@]}" -eq 0 ] || { echo "Stacked:"; printf '  %s\n' "${OK[@]}"; }
+  if [ "${#FAILED[@]}" -gt 0 ]; then
+    echo "FAILED (still queued; fix and re-run astro-stack --changed):"; printf '  %s\n' "${FAILED[@]}"; exit 1
+  fi
+  [ "${#OK[@]}" -gt 0 ] || echo "Nothing to stack."
+  exit 0
+fi
+
 # ---- resolve the target folder ----
-TDIR=""; n=0
-for d in "$ARCHIVE/Targets/$TARGET"*/; do
-  [ -d "$d/raw" ] || continue
-  TDIR="${d%/}"; n=$((n+1))
-  [ "$(basename "$TDIR")" = "$TARGET" ] && { n=1; break; }
-done
-[ "$n" -eq 1 ] || { echo "No unique target matching '$TARGET' with a raw/ folder in $ARCHIVE/Targets"; exit 1; }
+TDIR="$(resolve_target "$TARGET" || true)"
+[ -n "$TDIR" ] || { echo "No unique target matching '$TARGET' with a raw/ folder in $ARCHIVE/Targets"; exit 1; }
 TNAME="$(basename "$TDIR")"
 
 # ---- pick the nights ----

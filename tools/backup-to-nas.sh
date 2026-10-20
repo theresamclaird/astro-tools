@@ -30,7 +30,7 @@ LOG="$SRC/_tools/logs/backup-$(date +%Y%m%d-%H%M).log"
 exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date) backup $SRC -> $DST"
 
-EXCLUDES=(.Spotlight-V100 .fseventsd .Trashes .DS_Store '._*' '*.partial' 'System Volume Information' '$RECYCLE.BIN' _tools/logs)
+EXCLUDES=(.Spotlight-V100 .fseventsd .Trashes .DS_Store '._*' '*.partial' 'System Volume Information' '$RECYCLE.BIN' _tools/logs _tools/stack-queue.tsv)
 NEED=$(du -sk "$SRC/Targets" "$SRC/_tools" | awk '{s+=$1} END{printf "%d", s/1024/1024}')
 # GNU (Linux) and BSD (macOS) tools differ; these work on both.
 if command -v sha256sum >/dev/null 2>&1; then SHA256=(sha256sum); else SHA256=(shasum -a 256); fi
@@ -112,7 +112,7 @@ else
   # A file is skipped when the NAS already has it with the same size and it isn't newer on Astro.
   echo "=== $(date +%H:%M:%S) listing files"
   LIST="$(mktemp)"
-  FIND_EX=(); for e in "${EXCLUDES[@]}"; do case "$e" in */*) FIND_EX+=(! -path "./$e/*") ;; *) FIND_EX+=(! -name "$e" ! -path "./$e/*") ;; esac; done
+  FIND_EX=(); for e in "${EXCLUDES[@]}"; do case "$e" in */*) FIND_EX+=(! -path "./$e" ! -path "./$e/*") ;; *) FIND_EX+=(! -name "$e" ! -path "./$e/*") ;; esac; done
   ( cd "$SRC" && find . -type f "${FIND_EX[@]}" -print0 ) > "$LIST"
   N=$(tr -cd '\0' < "$LIST" | wc -c | tr -d ' ')
   echo "=== $(date +%H:%M:%S) copying ($N files)"
@@ -165,7 +165,7 @@ rm -f "$FAILED"
 BAD=$(wc -l < "$PROBLEMS" | tr -d ' ')
 
 # Files on the drive that aren't in the manifest yet were copied but not hash-checked
-UNLISTED=$(cd "$SRC" && find Targets _tools -type f ! -name '._*' ! -name '.DS_Store' ! -path '_tools/logs/*' | \
+UNLISTED=$(cd "$SRC" && find Targets _tools -type f ! -name '._*' ! -name '.DS_Store' ! -path '_tools/logs/*' ! -path '_tools/stack-queue.tsv' | \
   awk 'NR==FNR{ m[substr($0,67)]=1; next } !($0 in m)' MANIFEST.sha256 - | wc -l | tr -d ' ')
 
 if [ "$BAD" -eq 0 ]; then
