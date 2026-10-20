@@ -144,6 +144,9 @@ Either way:
 - a file edited after the manifest was written (e.g. `notes.md`) passes if the
   NAS copy matches the archive's current version;
 - the Mac is kept awake for the run (`caffeinate`);
+- over SSH in a terminal, rsync shows a live progress line (percent of the total,
+  rate, time left). It needs rsync 3.1+ (macOS: `brew install rsync`); without it
+  the copy step runs silently. The progress line isn't written to the log;
 - over SSH, a dropped connection is retried automatically (6 attempts, 60 s apart;
   `ASTRO_BACKUP_TRIES` / `ASTRO_BACKUP_RETRY_WAIT` to change), and the backup is only
   reported complete if the NAS confirms its checksum pass finished;
