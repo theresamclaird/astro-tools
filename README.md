@@ -73,17 +73,25 @@ Environment variables of the same names override the file. If `ASTRO_ARCHIVE` /
 
 ```bash
 astro-ingest --dry-run   # see what's new on the Seestar and where it will go
-astro-ingest             # copy, verify, update notes.md
+astro-ingest             # copy, verify, update notes.md, queue the new nights
 astro-backup             # mirror the archive to the NAS and verify
+astro-stack --changed    # stack every target that got a new night
+```
+
+or all of it in one go, stopping at the first step that fails:
+
+```bash
+astro-nightly            # ingest -> backup -> stack --changed
 ```
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `astro-ingest` | Files new Seestar output into the archive by target and night, verifies every copy, updates `MANIFEST.sha256` and each target's `notes.md` |
+| `astro-ingest` | Files new Seestar output into the archive by target and night, verifies every copy, updates `MANIFEST.sha256` and each target's `notes.md`, and queues the new nights for stacking |
 | `astro-backup` | Copies the archive to the NAS over SSH (or to a mounted share), never deleting there, then verifies the NAS copy against `MANIFEST.sha256` and repairs bad copies from the archive |
-| `astro-stack` | Stacks every night of one target from the archive with Siril: plate-solves each frame, registers onto the full mosaic canvas, stacks, and writes the result to the target's `processing/` folder |
+| `astro-stack` | Stacks every night of one target from the archive with Siril: plate-solves each frame, registers onto the full mosaic canvas, stacks, and writes the result to the target's `processing/` folder. `--changed` does this for every target with newly queued nights |
+| `astro-nightly` | Runs `astro-ingest`, `astro-backup` and `astro-stack --changed` in order, stopping at the first failure |
 | `astro-frame-stats` | Measures every frame of one night (sharpness, roundness, background, star count, by mosaic panel), shows what each filter cut would drop, and optionally stacks the night with several filters to compare |
 | `seestar-split-panels` | Groups a mosaic's subs into one folder per panel by clustering their RA/Dec |
 | `seestar-reject-frames` | Finds and sets aside frames spoiled by an obstruction (e.g. a lit tree branch) |
@@ -119,6 +127,11 @@ subfolders are searched. With no `SOURCE`, `ASTRO_SOURCE` is used
 - **Safety:** never modifies the source and never overwrites a different file
   in the archive (reported as a conflict). Each copy is read back and compared
   by SHA-256 before it's added to the manifest. Re-running copies only what's new.
+- **Stacking queue:** each night that received light frames is appended to
+  `<archive>/_tools/stack-queue.tsv` for `astro-stack --changed`. It isn't
+  backed up (it's working state, not data).
+- Exit status: 0 done or nothing new, 1 failures or conflicts, 2 cancelled at
+  the confirmation prompt.
 
 ### astro-backup
 
@@ -187,6 +200,7 @@ standard one with `brew install rsync`; `astro-backup` uses it automatically.
 astro-stack TARGET [--nights GLOB] [--min-frames N] [--batch-max N] [--work DIR] [--name NAME]
                    [--rebuild] [--keep] [--dry-run]
 astro-stack TARGET --nights GLOB --adopt MASTER.fit --frames N
+astro-stack --changed [--min-frames N] [--batch-max N] [--work DIR] [--rebuild] [--keep] [--dry-run]
 ```
 
 Stacks all of a target's raw nights into one image. `TARGET` is the folder name
@@ -235,6 +249,38 @@ frames it stacked (for weighting). The file is copied, not moved.
 - Needs Siril 1.4+: `siril-cli` on the PATH, `/Applications/Siril.app`, or the
   Flatpak (`org.siril.Siril`), which must be allowed to see the archive and
   scratch disk: `flatpak override --user --filesystem=/run/media/$USER --filesystem=/data org.siril.Siril`.
+
+**`--changed`** stacks whatever `astro-ingest` queued instead of one target.
+For each queued target, the new nights are grouped by scope and filter, and each
+group is stacked together with all of that target's nights of the same scope and
+filter (mosaic or not), so every result is the target's full stack including the
+new night. Thanks to the stored batch masters, that costs one small batch plus the
+combine. Runs are named `<today>_siril-all_<scope>_<filter>`, e.g.
+`2026-10-20_siril-all_S50_IRCUT`.
+
+- Queued nights are dropped with a note, not stacked, when they're Moon/Sun data,
+  have fewer than `--min-frames` frames, or their target or night folder can't be
+  found. A target renamed since ingest (e.g. `NGC7331` → `NGC7331_Deer-Lick-Galaxy`)
+  is still found by its prefix.
+- A group's nights leave the queue once its stack succeeds. A failed group stays
+  queued for the next run, the remaining groups still run, and the exit status is 1.
+- `--dry-run` shows each group's plan and leaves the queue alone.
+- A bad night goes in like any other. To leave it out, restack the target by hand
+  with `--nights`; the stored masters for the other nights are reused.
+
+### astro-nightly
+
+```
+astro-nightly [SOURCE ...] [--yes] [--no-previews] [--no-backup] [--no-stack] [--dry-run]
+```
+
+`astro-ingest`, then `astro-backup`, then `astro-stack --changed`, each only if the
+one before succeeded, so new data is on the NAS before any stacking starts. The
+machine is kept awake for the whole run. `SOURCE`, `--yes` and `--no-previews`
+go to `astro-ingest`; without `--yes` it asks once before copying, and everything
+after that runs unattended. `--no-backup` skips the backup (e.g. the NAS is off),
+`--no-stack` stops after it, and `--dry-run` shows what would be ingested and what's
+already queued. The exit status is that of the step that failed.
 
 ### astro-frame-stats
 

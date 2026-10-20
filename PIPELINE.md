@@ -14,6 +14,8 @@ Every session goes through the same six steps, in order. Raw data never changes 
 5. **Process in Siril:** crop, background extraction, plate-solve, colour calibration (SPCC), GHS stretch, export a 16-bit TIFF.
 6. **Finish in Photoshop** on the Mac: StarXTerminator, then final adjustments on the starless layer.
 
+After a night out, `astro-nightly` runs steps 1, 2 and 4 in one go: ingest, back up, then stack every target that got a new night (`astro-stack --changed`), stopping at the first step that fails. Run the steps separately when you want to check frame quality before stacking.
+
 All commands run on the Linux workstation (Ubuntu) unless noted; on macOS the drives are under `/Volumes/` instead. Every command takes `--help`, and every one that changes something takes `--dry-run`.
 
 ### Drives and folders
