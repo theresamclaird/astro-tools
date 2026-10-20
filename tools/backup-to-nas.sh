@@ -26,11 +26,12 @@ fi
 DST="${1:-${ASTRO_NAS:-/Volumes/home/Astrophotography}}"
 [ -f "$SRC/MANIFEST.sha256" ] || { echo "Astro drive not mounted (no $SRC/MANIFEST.sha256)"; exit 1; }
 mkdir -p "$SRC/_tools/logs"
+exec 3>&1   # the terminal, kept aside so rsync's progress line reaches it but not the log
 LOG="$SRC/_tools/logs/backup-$(date +%Y%m%d-%H%M).log"
 exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date) backup $SRC -> $DST"
 
-EXCLUDES=(.Spotlight-V100 .fseventsd .Trashes .DS_Store '._*' '*.partial' 'System Volume Information' '$RECYCLE.BIN' _tools/logs _tools/stack-queue.tsv)
+EXCLUDES=(.Spotlight-V100 .fseventsd .Trashes .DS_Store '._*' '*.partial' 'System Volume Information' '$RECYCLE.BIN' lost+found _tools/logs _tools/stack-queue.tsv)
 NEED=$(du -sk "$SRC/Targets" "$SRC/_tools" | awk '{s+=$1} END{printf "%d", s/1024/1024}')
 # GNU (Linux) and BSD (macOS) tools differ; these work on both.
 if command -v sha256sum >/dev/null 2>&1; then SHA256=(sha256sum); else SHA256=(shasum -a 256); fi
@@ -69,13 +70,24 @@ if [ "$MODE" = ssh ]; then
   RSYNC=rsync
   for r in /opt/homebrew/bin/rsync /usr/local/bin/rsync; do [ -x "$r" ] && { RSYNC="$r"; break; }; done
   EX=(); for e in "${EXCLUDES[@]}"; do EX+=(--exclude "$e"); done
+  # A live progress line (total %, rate, time left) when run in a terminal with rsync 3.1+.
+  # macOS's built-in rsync lacks --info; `brew install rsync` adds it. --no-inc-recursive
+  # scans the whole tree first so the percentage is of the real total.
+  PROGRESS=0
+  [ -t 3 ] && "$RSYNC" --help 2>&1 | grep -q -- '--info=' && PROGRESS=1
 
   # rsync skips what's already on the NAS, so after a dropped connection we just run it again.
   TRIES="${ASTRO_BACKUP_TRIES:-6}"; WAIT="${ASTRO_BACKUP_RETRY_WAIT:-60}"; try=1
   while :; do
     echo "=== $(date +%H:%M:%S) copying with $RSYNC (only new or changed files are sent; attempt $try/$TRIES)"
-    "$RSYNC" -rt -e "ssh $SSH_OPTS" "${EX[@]}" "$SRC/" "$HOST:$RPATH/" | grep -v '/$'
-    rc=${PIPESTATUS[0]}
+    if [ "$PROGRESS" -eq 1 ]; then
+      "$RSYNC" -rt --info=progress2 --no-inc-recursive -e "ssh $SSH_OPTS" "${EX[@]}" "$SRC/" "$HOST:$RPATH/" >&3
+      rc=$?
+      echo >&3   # end the progress line
+    else
+      "$RSYNC" -rt -e "ssh $SSH_OPTS" "${EX[@]}" "$SRC/" "$HOST:$RPATH/" | grep -v '/$'
+      rc=${PIPESTATUS[0]}
+    fi
     [ "$rc" -eq 0 ] && break
     if [ "$try" -ge "$TRIES" ]; then
       echo "rsync failed $try times (last exit code $rc). Re-run later; only what's missing will be sent."; exit 1
