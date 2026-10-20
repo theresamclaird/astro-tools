@@ -31,7 +31,7 @@ LOG="$SRC/_tools/logs/backup-$(date +%Y%m%d-%H%M).log"
 exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date) backup $SRC -> $DST"
 
-EXCLUDES=(.Spotlight-V100 .fseventsd .Trashes .DS_Store '._*' '*.partial' 'System Volume Information' '$RECYCLE.BIN' _tools/logs)
+EXCLUDES=(.Spotlight-V100 .fseventsd .Trashes .DS_Store '._*' '*.partial' 'System Volume Information' '$RECYCLE.BIN' lost+found _tools/logs)
 NEED=$(du -sk "$SRC/Targets" "$SRC/_tools" | awk '{s+=$1} END{printf "%d", s/1024/1024}')
 # GNU (Linux) and BSD (macOS) tools differ; these work on both.
 if command -v sha256sum >/dev/null 2>&1; then SHA256=(sha256sum); else SHA256=(shasum -a 256); fi
