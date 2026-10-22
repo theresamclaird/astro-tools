@@ -93,6 +93,7 @@ astro-nightly            # ingest -> backup -> stack --changed
 | `astro-stack` | Stacks every night of one target from the archive with Siril: plate-solves each frame, registers onto the full mosaic canvas, stacks, and writes the result to the target's `processing/` folder. `--changed` does this for every target with newly queued nights |
 | `astro-nightly` | Runs `astro-ingest`, `astro-backup` and `astro-stack --changed` in order, stopping at the first failure |
 | `astro-frame-stats` | Measures every frame of one night (sharpness, roundness, background, star count, by mosaic panel), shows what each filter cut would drop, and optionally stacks the night with several filters to compare |
+| `astro-process` | Takes a stacked linear image through crop, background extraction, plate-solve, colour calibration and a two-pass stretch in Siril, choosing every stretch setting from the measured sky level, and writes a 16-bit TIFF for Photoshop |
 | `seestar-split-panels` | Groups a mosaic's subs into one folder per panel by clustering their RA/Dec |
 | `seestar-reject-frames` | Finds and sets aside frames spoiled by an obstruction (e.g. a lit tree branch) |
 | `seestar-stack-panels` | Stacks each panel into a master with Siril |
@@ -308,6 +309,36 @@ JPG of each crop, and writes `comparison.txt`. Each variant takes a full
 register + stack of the night, so start with a smaller night. Re-running
 reuses the debayered frames and finished stacks. The scratch folder is printed
 at the end; delete it when you're done.
+
+### astro-process
+
+```
+astro-process TARGET [RUN] [--crop X,Y,W,H] [--sensor S] [--filter F] [--whiteref W]
+              [--bg-degree N] [--sky 0.10] [--saturation 0.5] [--dry-run]
+```
+
+Automates the Siril half of processing (Step 5 in [PIPELINE.md](PIPELINE.md)) so
+every image starts from the same, reasonable point. It works on the newest
+`processing/<run>/*_linear.fit` (or the `RUN` given) and saves every step to
+`processing/<run>/auto/`: `01_crop`, `02_bg`, `03_spcc`, `04_offset`,
+`05_stretch1`, `06_stretch2`, `07_stretched`, `08_final` and a 16-bit TIFF.
+
+All stretch settings come from the sky level, measured after each step:
+
+- **offset:** black point per channel 5 noise-sigma below the sky (removes the
+  grey offset that otherwise washes out the colour);
+- **stretch 1:** GHS, luminance, symmetry point just above the sky, D 3, b 6, HP 0.95;
+- **stretch 2:** GHS, symmetry point 1.3x the new sky, shadow protection at the
+  sky, D 2, b 4;
+- **final black point:** puts the sky at `--sky` (default 0.10), never clipping
+  more than 0.1% of pixels;
+- **saturation** `--saturation` (default 0.5).
+
+The values used are written to `auto/README.txt`. The crop defaults to trimming
+the empty mosaic edges; background samples are placed automatically, which can
+be fooled by a very large galaxy. Treat the result as a starting point: open
+`07_stretched` or `08_final` in Siril to fine-tune, or crop by hand and pass
+`--crop`.
 
 ### Mosaics
 
