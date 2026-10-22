@@ -30,6 +30,7 @@ astro-backup|bash|tools/backup-to-nas.sh
 astro-stack|bash|tools/stack/astro-stack.sh
 astro-nightly|bash|tools/nightly.sh
 astro-frame-stats|py|tools/stack/frame_stats.py
+astro-process|py|tools/stack/process.py
 seestar-split-panels|py|tools/mosaic/seestar_split_panels.py
 seestar-stack-panels|py|tools/mosaic/seestar_stack_panels.py
 seestar-prep-panels|py|tools/mosaic/seestar_prep_panels.py
