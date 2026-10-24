@@ -73,7 +73,7 @@ What else it does:
 
 ## Step 2: Back up
 
-`astro-backup` copies the archive to a destination, never deletes anything there, then verifies the copy against `MANIFEST.sha256` and recopies any file that fails. Run it to the mirror drive and to the NAS after every ingest.
+`astro-backup` copies the archive to a destination, never deletes anything there, then verifies the files it copied and recopies any that fail (`--full` re-checks the whole copy against `MANIFEST.sha256`). Run it to the mirror drive and to the NAS after every ingest.
 
 **To a mirror drive** (a mounted drive, here a Samsung T9, verified by reading every file back):
 
@@ -90,6 +90,7 @@ astro-backup            # uses ASTRO_NAS from the config
 - Re-running sends only what's missing, so an interrupted backup is resumed by running it again.
 - Over SSH, a dropped connection is retried 6 times, 60 s apart. The run counts as complete only when the NAS confirms its checksum pass finished.
 - The machine is kept awake for the run, and logs go to `Astro/_tools/logs/`.
+- A routine run verifies only the files it copied this time, so it finishes quickly. Once a month, run `astro-backup --full` to each destination to re-read the whole backup; the routine run reminds you when it's due.
 - A file you edited after it was archived (such as `notes.md`) passes if the copy matches the archive's current version.
 
 **When both backups report success, clear the night from the Seestar.** Its storage is not a backup.

@@ -89,7 +89,7 @@ astro-nightly            # ingest -> backup -> stack --changed
 | Command | What it does |
 |---|---|
 | `astro-ingest` | Files new Seestar output into the archive by target and night, verifies every copy, updates `MANIFEST.sha256` and each target's `notes.md`, and queues the new nights for stacking |
-| `astro-backup` | Copies the archive to the NAS over SSH (or to a mounted share), never deleting there, then verifies the NAS copy against `MANIFEST.sha256` and repairs bad copies from the archive |
+| `astro-backup` | Copies the archive to the NAS over SSH (or to a mounted share), never deleting there, then verifies what it copied (or, with `--full`, the whole copy against `MANIFEST.sha256`) and repairs bad copies from the archive |
 | `astro-stack` | Stacks every night of one target from the archive with Siril: plate-solves each frame, registers onto the full mosaic canvas, stacks, and writes the result to the target's `processing/` folder. `--changed` does this for every target with newly queued nights |
 | `astro-nightly` | Runs `astro-ingest`, `astro-backup` and `astro-stack --changed` in order, stopping at the first failure |
 | `astro-frame-stats` | Measures every frame of one night (sharpness, roundness, background, star count, by mosaic panel), shows what each filter cut would drop, and optionally stacks the night with several filters to compare |
@@ -137,7 +137,7 @@ subfolders are searched. With no `SOURCE`, `ASTRO_SOURCE` is used
 ### astro-backup
 
 ```
-astro-backup [DESTINATION]
+astro-backup [--full] [DESTINATION]
 ```
 
 `DESTINATION` (default `ASTRO_NAS`) is either:
@@ -150,6 +150,15 @@ astro-backup [DESTINATION]
 - **`/local/path` — a mounted share**, e.g. `/Volumes/home/Astrophotography`.
   Copies with `cp` (macOS's built-in rsync fails on SMB shares) and verifies by
   reading every file back. Much slower, and sensitive to the share dropping.
+
+**What gets verified.** A routine run checks only the files it copied in that
+run: each one is checksummed at the destination and compared with the archive.
+That keeps a backup after one night's ingest down to minutes. `--full` checks
+every file in `MANIFEST.sha256` at the destination, which reads the whole
+backup and catches a copy that has gone bad since it was written. Run `--full`
+about once a month for each destination; a routine run reminds you when it has
+been 30 days or more (the date of the last full check is kept in
+`_tools/verified/`).
 
 Either way:
 

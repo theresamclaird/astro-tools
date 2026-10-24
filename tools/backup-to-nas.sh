@@ -1,13 +1,24 @@
 #!/bin/bash
-# Back up the Astro archive to the NAS, then verify the NAS copy against MANIFEST.sha256.
-# Copies only: never deletes anything on the NAS. Safe to re-run; unchanged files are skipped.
-# Usage: astro-backup [destination]
+# Back up the Astro archive to a destination and verify the copy.
+# Copies only: never deletes anything at the destination. Safe to re-run; unchanged files are skipped.
+# Usage: astro-backup [--full] [destination]
 #   destination (default $ASTRO_NAS) is either
-#     host:/path   over SSH (recommended; host is an ~/.ssh/config alias, key login required), or
-#     /local/path  a mounted share or drive, e.g. /Volumes/home/Astrophotography or
-#                  /run/media/$USER/T9/Astro-mirror
+#     host:/path   over SSH (host is an ~/.ssh/config alias, key login required), or
+#     /local/path  a mounted drive or share, e.g. /run/media/$USER/AstroBackup
+#   Verification: by default only the files copied in this run are checked (each is read
+#   back from the destination and compared with the archive). --full checks every file in
+#   MANIFEST.sha256 at the destination, which catches files that went bad on the backup
+#   drive since they were copied; run it about once a month (you'll be reminded).
 set -u
-case "${1:-}" in -h|--help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;; -*) echo "unknown option: $1 (try --help)"; exit 1 ;; esac
+FULL=0; DST_ARG=""
+for a in "$@"; do
+  case "$a" in
+    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --full) FULL=1 ;;
+    -*) echo "unknown option: $a (try --help)"; exit 1 ;;
+    *) [ -z "$DST_ARG" ] || { echo "only one destination"; exit 1; }; DST_ARG="$a" ;;
+  esac
+done
 
 # Keep the machine awake for the whole run (a sleeping machine drops network connections).
 if [ -z "${ASTRO_CAFFEINATED:-}" ]; then
@@ -23,15 +34,18 @@ if [ -n "${ASTRO_ARCHIVE:-}" ]; then SRC="$ASTRO_ARCHIVE"
 else SRC=/Volumes/Astro
   for c in "/run/media/$USER/Astro" "/media/$USER/Astro"; do [ -f "$c/MANIFEST.sha256" ] && { SRC="$c"; break; }; done
 fi
-DST="${1:-${ASTRO_NAS:-/Volumes/home/Astrophotography}}"
+DST="${DST_ARG:-${ASTRO_NAS:-/Volumes/home/Astrophotography}}"
 [ -f "$SRC/MANIFEST.sha256" ] || { echo "Astro drive not mounted (no $SRC/MANIFEST.sha256)"; exit 1; }
 mkdir -p "$SRC/_tools/logs"
 exec 3>&1   # the terminal, kept aside so rsync's progress line reaches it but not the log
 LOG="$SRC/_tools/logs/backup-$(date +%Y%m%d-%H%M).log"
 exec > >(tee -a "$LOG") 2>&1
-echo "=== $(date) backup $SRC -> $DST"
+echo "=== $(date) backup $SRC -> $DST ($([ "$FULL" -eq 1 ] && echo "full verification" || echo "verifying new files only"))"
+# When this destination last had a full verification (kept on the archive, per destination)
+MARK="$SRC/_tools/verified/$(printf '%s' "$DST" | tr '/: ' '___')"
+COPIED="$(mktemp)"   # files copied in this run, one per line
 
-EXCLUDES=(.Spotlight-V100 .fseventsd .Trashes .DS_Store '._*' '*.partial' 'System Volume Information' '$RECYCLE.BIN' lost+found _tools/logs _tools/stack-queue.tsv)
+EXCLUDES=(.Spotlight-V100 .fseventsd .Trashes .DS_Store '._*' '*.partial' 'System Volume Information' '$RECYCLE.BIN' lost+found _tools/logs _tools/stack-queue.tsv _tools/verified)
 NEED=$(du -sk "$SRC/Targets" "$SRC/_tools" | awk '{s+=$1} END{printf "%d", s/1024/1024}')
 # GNU (Linux) and BSD (macOS) tools differ; these work on both.
 if command -v sha256sum >/dev/null 2>&1; then SHA256=(sha256sum); else SHA256=(shasum -a 256); fi
@@ -64,8 +78,8 @@ if [ "$MODE" = ssh ]; then
   case "$RPATH" in *' '*) echo "The NAS path must not contain spaces: $RPATH"; exit 1 ;; esac
   remote "mkdir -p $(q "$RPATH")" || exit 1
   FREE=$(remote "df -k $(q "$RPATH")" | awk 'NR==2{printf "%d", $4/1024/1024}')
-  echo "Archive: ~${NEED} GiB   Free on NAS: ${FREE:-?} GiB"
-  [ -n "$FREE" ] && [ "$FREE" -le "$NEED" ] && echo "WARNING: NAS free space may be short (files already on the NAS don't need space again)."
+  echo "Archive: ~${NEED} GiB   Free at destination: ${FREE:-?} GiB"
+  [ -n "$FREE" ] && [ "$FREE" -le "$NEED" ] && echo "WARNING: free space may be short (files already there don't need space again)."
 
   RSYNC=rsync
   for r in /opt/homebrew/bin/rsync /usr/local/bin/rsync; do [ -x "$r" ] && { RSYNC="$r"; break; }; done
@@ -75,17 +89,25 @@ if [ "$MODE" = ssh ]; then
   # scans the whole tree first so the percentage is of the real total.
   PROGRESS=0
   [ -t 3 ] && "$RSYNC" --help 2>&1 | grep -q -- '--info=' && PROGRESS=1
+  # rsync's own log of what it sent, so only those files need verifying. macOS's built-in
+  # rsync can't write it; then every run does a full verification.
+  XFER="$(mktemp)"; LOGOPT=()
+  if "$RSYNC" --help 2>&1 | grep -q -- '--log-file-format'; then
+    LOGOPT=(--log-file="$XFER" --log-file-format='%i %n')
+  elif [ "$FULL" -eq 0 ]; then
+    echo "(This rsync can't list what it sent, so every file will be verified. 'brew install rsync' fixes that.)"; FULL=1
+  fi
 
   # rsync skips what's already on the NAS, so after a dropped connection we just run it again.
   TRIES="${ASTRO_BACKUP_TRIES:-6}"; WAIT="${ASTRO_BACKUP_RETRY_WAIT:-60}"; try=1
   while :; do
     echo "=== $(date +%H:%M:%S) copying with $RSYNC (only new or changed files are sent; attempt $try/$TRIES)"
     if [ "$PROGRESS" -eq 1 ]; then
-      "$RSYNC" -rt --info=progress2 --no-inc-recursive -e "ssh $SSH_OPTS" "${EX[@]}" "$SRC/" "$HOST:$RPATH/" >&3
+      "$RSYNC" -rt --info=progress2 --no-inc-recursive ${LOGOPT[@]+"${LOGOPT[@]}"} -e "ssh $SSH_OPTS" "${EX[@]}" "$SRC/" "$HOST:$RPATH/" >&3
       rc=$?
       echo >&3   # end the progress line
     else
-      "$RSYNC" -rt -e "ssh $SSH_OPTS" "${EX[@]}" "$SRC/" "$HOST:$RPATH/" | grep -v '/$'
+      "$RSYNC" -rt ${LOGOPT[@]+"${LOGOPT[@]}"} -e "ssh $SSH_OPTS" "${EX[@]}" "$SRC/" "$HOST:$RPATH/" | grep -v '/$'
       rc=${PIPESTATUS[0]}
     fi
     [ "$rc" -eq 0 ] && break
@@ -95,33 +117,45 @@ if [ "$MODE" = ssh ]; then
     echo "--- rsync stopped (exit code $rc), probably a dropped connection. Retrying in ${WAIT}s."
     sleep "$WAIT"
     until remote true 2>/dev/null; do
-      try=$((try+1)); [ "$try" -le "$TRIES" ] || { echo "The NAS is not reachable. Re-run later."; exit 1; }
-      echo "--- NAS not reachable yet; waiting ${WAIT}s"; sleep "$WAIT"
+      try=$((try+1)); [ "$try" -le "$TRIES" ] || { echo "The destination is not reachable. Re-run later."; exit 1; }
+      echo "--- destination not reachable yet; waiting ${WAIT}s"; sleep "$WAIT"
     done
     try=$((try+1))
   done
   echo "=== $(date +%H:%M:%S) copy complete"
+  # Files actually sent ("YYYY/MM/DD HH:MM:SS [pid] <f......... path"; < sent, > local copy)
+  awk '$4 ~ /^[<>]f/ { sub(/^[^ ]+ [^ ]+ [^ ]+ [^ ]+ /, ""); print }' "$XFER" | sort -u > "$COPIED"; rm -f "$XFER"
 
-  TOTAL=$(wc -l < "$SRC/MANIFEST.sha256" | tr -d ' ')
-  echo "=== $(date +%H:%M:%S) verifying $TOTAL files (the NAS checksums its own disks; only mismatches come back)"
   FAILED="$(mktemp)"
   DONE_MARK="__ASTRO_VERIFY_DONE__"
-  remote "cd $(q "$RPATH") && { sha256sum -c MANIFEST.sha256 2>/dev/null | grep -v ': OK\$'; echo $DONE_MARK; }" > "$FAILED"
+  if [ "$FULL" -eq 1 ]; then
+    TOTAL=$(wc -l < "$SRC/MANIFEST.sha256" | tr -d ' ')
+    echo "=== $(date +%H:%M:%S) verifying all $TOTAL files (the destination checksums its own disks; only mismatches come back)"
+    remote "cd $(q "$RPATH") && { sha256sum -c MANIFEST.sha256 2>/dev/null | grep -v ': OK\$'; echo $DONE_MARK; }" > "$FAILED"
+  else
+    TOTAL=$(wc -l < "$COPIED" | tr -d ' ')
+    echo "=== $(date +%H:%M:%S) verifying the $TOTAL file(s) copied in this run"
+    # Checksum them here, then have the destination check its copies against that list.
+    SUMS="$(mktemp)"
+    while IFS= read -r f; do printf '%s  %s\n' "$(sha "$SRC/$f")" "$f"; done < "$COPIED" > "$SUMS"
+    remote "cd $(q "$RPATH") && { sha256sum -c - 2>/dev/null | grep -v ': OK\$'; echo $DONE_MARK; }" < "$SUMS" > "$FAILED"
+    rm -f "$SUMS"
+  fi
   # No end marker = the connection dropped mid-check; never report success on a partial check.
-  grep -qx "$DONE_MARK" "$FAILED" || { echo "The checksum pass on the NAS was interrupted. Re-run astro-backup (nothing will be recopied)."; exit 1; }
+  grep -qx "$DONE_MARK" "$FAILED" || { echo "The checksum pass at the destination was interrupted. Re-run with --full (nothing will be recopied)."; exit 1; }
   grep -vx "$DONE_MARK" "$FAILED" > "$FAILED.x"; mv "$FAILED.x" "$FAILED"
   nas_sha() { remote "sha256sum $(q "$RPATH/$1") 2>/dev/null" | cut -c1-64; }
   put() { remote "mkdir -p $(q "$(dirname "$RPATH/$1")") && cat > $(q "$RPATH/$1.partial") && mv -f $(q "$RPATH/$1.partial") $(q "$RPATH/$1")" < "$SRC/$1"; }
 else
   # ---------------------------------------------------------------- local mode
-  [ -d "$DST" ] || { echo "NAS folder not found: $DST  (is the share mounted?)"; exit 1; }
-  [ -w "$DST" ] || { echo "NAS folder not writable: $DST"; exit 1; }
-  FREE=$(df -g "$DST" | awk 'NR==2{print $4}')
-  echo "Archive: ~${NEED} GiB   Free on NAS: ${FREE} GiB"
-  [ "$FREE" -gt "$NEED" ] || echo "WARNING: NAS free space may be short (files already on the NAS don't need space again)."
+  [ -d "$DST" ] || { echo "Destination folder not found: $DST  (is the drive or share mounted?)"; exit 1; }
+  [ -w "$DST" ] || { echo "Destination folder not writable: $DST"; exit 1; }
+  FREE=$(df -Pk "$DST" | awk 'NR==2{printf "%d", $4/1024/1024}')
+  echo "Archive: ~${NEED} GiB   Free at destination: ${FREE} GiB"
+  [ "$FREE" -gt "$NEED" ] || echo "WARNING: free space may be short (files already there don't need space again)."
 
   # Plain cp to a .partial name, then rename (macOS's built-in rsync fails on SMB shares).
-  # A file is skipped when the NAS already has it with the same size and it isn't newer on Astro.
+  # A file is skipped when the destination already has it with the same size and it isn't newer on Astro.
   echo "=== $(date +%H:%M:%S) listing files"
   LIST="$(mktemp)"
   FIND_EX=(); for e in "${EXCLUDES[@]}"; do case "$e" in */*) FIND_EX+=(! -path "./$e" ! -path "./$e/*") ;; *) FIND_EX+=(! -name "$e" ! -path "./$e/*") ;; esac; done
@@ -137,22 +171,45 @@ else
       mkdir -p "$(dirname "$d")"
       if { cp -p "$s" "$d.partial" 2>/dev/null || cp "$s" "$d.partial"; } && \
          [ "$(fsize "$s")" = "$(fsize "$d.partial")" ] && mv -f "$d.partial" "$d"; then
-        copied=$((copied+1))
+        copied=$((copied+1)); printf '%s\n' "$f" >> "$COPIED"
       else
         echo "COPY FAILED: $f"; failed=$((failed+1))
       fi
     fi
-    [ $((i % 500)) -eq 0 ] && echo "  $(date +%H:%M:%S)  $i / $N  (copied $copied, already on NAS $skipped, failed $failed)"
+    [ $((i % 500)) -eq 0 ] && echo "  $(date +%H:%M:%S)  $i / $N  (copied $copied, already there $skipped, failed $failed)"
   done < "$LIST"
   rm -f "$LIST"
-  echo "Copy done: copied $copied, already on NAS $skipped, failed $failed"
+  echo "Copy done: copied $copied, already there $skipped, failed $failed"
   [ "$failed" -eq 0 ] || { echo "Some files failed to copy (see above). Re-run the script to retry them."; exit 1; }
   echo "=== $(date +%H:%M:%S) copy complete"
 
-  TOTAL=$(wc -l < "$DST/MANIFEST.sha256" | tr -d ' ')
-  echo "=== $(date +%H:%M:%S) verifying $TOTAL files on the NAS (reads the whole archive over the network)"
+  # Make the read-back come from the disk, not from memory still holding what was just
+  # written (Linux; elsewhere this is skipped and the check reads what the OS has cached).
+  evict() { command -v python3 >/dev/null 2>&1 || return 0
+    python3 - "$DST" "$@" <<'EOF' 2>/dev/null || true
+import os, sys
+root = sys.argv[1]
+for f in sys.argv[2:]:
+    try:
+        fd = os.open(os.path.join(root, f), os.O_RDONLY); os.fsync(fd)
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED); os.close(fd)
+    except Exception: pass
+EOF
+  }
   FAILED="$(mktemp)"
-  ( cd "$DST" && "${SHA256[@]}" -c MANIFEST.sha256 2>/dev/null | grep -v ': OK$' ) > "$FAILED"
+  if [ "$FULL" -eq 1 ]; then
+    TOTAL=$(wc -l < "$DST/MANIFEST.sha256" | tr -d ' ')
+    echo "=== $(date +%H:%M:%S) verifying all $TOTAL files at the destination (reads the whole backup)"
+    ( cd "$DST" && "${SHA256[@]}" -c MANIFEST.sha256 2>/dev/null | grep -v ': OK$' ) > "$FAILED"
+  else
+    TOTAL=$(wc -l < "$COPIED" | tr -d ' ')
+    echo "=== $(date +%H:%M:%S) verifying the $TOTAL file(s) copied in this run"
+    sync
+    while IFS= read -r f; do
+      evict "$f"
+      [ "$(sha "$SRC/$f")" = "$(sha "$DST/$f")" ] || echo "$f: FAILED" >> "$FAILED"
+    done < "$COPIED"
+  fi
   nas_sha() { sha "$DST/$1"; }
   put() { mkdir -p "$(dirname "$DST/$1")" && cp -p "$SRC/$1" "$DST/$1.partial" && mv -f "$DST/$1.partial" "$DST/$1"; }
 fi
@@ -165,15 +222,22 @@ while IFS= read -r line; do
   f="${line%: FAILED*}"
   [ -n "$f" ] || continue
   a=$(sha "$SRC/$f"); n=$(nas_sha "$f")
-  if [ -n "$a" ] && [ "$a" = "$n" ]; then
+  if [ "$FULL" -eq 0 ]; then
+    # New-files mode: a mismatch is recopied from the archive and checked again.
+    if [ -n "$a" ] && put "$f" && [ "$(nas_sha "$f")" = "$a" ]; then
+      echo "Repaired: $f (copy didn't match; recopied and re-checked)"; REPAIRED=$((REPAIRED+1))
+    else
+      echo "$line" >> "$PROBLEMS"
+    fi
+  elif [ -n "$a" ] && [ "$a" = "$n" ]; then
     EDITED=$((EDITED+1))
   elif [ -n "$a" ] && [ "$a" = "$(manifest_sha "$f")" ] && put "$f" && [ "$(nas_sha "$f")" = "$a" ]; then
-    echo "Repaired: $f (NAS copy was bad; recopied from Astro and re-checked)"; REPAIRED=$((REPAIRED+1))
+    echo "Repaired: $f (backup copy was bad; recopied from the archive and re-checked)"; REPAIRED=$((REPAIRED+1))
   else
     echo "$line" >> "$PROBLEMS"
   fi
 done < "$FAILED"
-rm -f "$FAILED"
+rm -f "$FAILED" "$COPIED"
 BAD=$(wc -l < "$PROBLEMS" | tr -d ' ')
 
 # Files on the drive that aren't in the manifest yet were copied but not hash-checked
@@ -181,14 +245,22 @@ UNLISTED=$(cd "$SRC" && find Targets _tools -type f ! -name '._*' ! -name '.DS_S
   awk 'NR==FNR{ m[substr($0,67)]=1; next } !($0 in m)' MANIFEST.sha256 - | wc -l | tr -d ' ')
 
 if [ "$BAD" -eq 0 ]; then
-  echo "Verified: all $TOTAL files on the NAS match the archive."
-  [ "$EDITED" -eq 0 ] || echo "($EDITED of them were edited after the manifest was written, e.g. notes.md; the NAS copy matches the drive's current version.)"
-  [ "$REPAIRED" -eq 0 ] || echo "($REPAIRED file(s) were repaired from the Astro drive; see 'Repaired:' lines above.)"
-  [ "$UNLISTED" -eq 0 ] || echo "Note: $UNLISTED file(s) on Astro aren't in MANIFEST.sha256 yet; they were copied but not hash-checked."
+  if [ "$FULL" -eq 1 ]; then
+    echo "Verified: all $TOTAL files in the manifest match the archive."
+    [ "$EDITED" -eq 0 ] || echo "($EDITED of them were edited after the manifest was written, e.g. notes.md; the backup matches the archive's current version.)"
+    [ "$UNLISTED" -eq 0 ] || echo "Note: $UNLISTED file(s) aren't in MANIFEST.sha256 (processing and final files); a full check covers manifest files, but each of those was verified when it was copied."
+    mkdir -p "$(dirname "$MARK")" && date +%s > "$MARK"
+  else
+    echo "Verified: all $TOTAL file(s) copied in this run match the archive."
+    last=$(cat "$MARK" 2>/dev/null || echo 0); age=$(( ($(date +%s) - last) / 86400 ))
+    if [ "$last" -eq 0 ]; then echo "Tip: this destination hasn't had a full check yet. Run 'astro-backup --full ${DST_ARG}' when convenient."
+    elif [ "$age" -ge 30 ]; then echo "Tip: the last full check of this destination was $age days ago. Run 'astro-backup --full ${DST_ARG}' when convenient."; fi
+  fi
+  [ "$REPAIRED" -eq 0 ] || echo "($REPAIRED file(s) were repaired from the archive; see 'Repaired:' lines above.)"
   rm -f "$PROBLEMS"
   echo "=== $(date) BACKUP COMPLETE"
 else
   echo "PROBLEMS: $BAD file(s) failed verification:"; cat "$PROBLEMS"; rm -f "$PROBLEMS"
-  echo "These could not be repaired automatically (the Astro copy may itself be bad)."
+  echo "These could not be repaired automatically (the archive copy may itself be bad)."
   echo "=== $(date) BACKUP FINISHED WITH ERRORS"; exit 1
 fi
