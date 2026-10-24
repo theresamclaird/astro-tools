@@ -213,6 +213,8 @@ The first adopt should list Oct 3–8 (7,140 frames), the second Oct 11, 12 and 
 
 ## Step 5: Process in Siril
 
+**Shortcut:** `astro-process M31` runs steps 2–8 below automatically (with an automatic crop) and writes every intermediate plus a 16-bit TIFF to `processing/<run>/auto/`, choosing all stretch settings from the measured sky. Use it as the starting point and fine-tune by hand. The manual steps below are what it does.
+
 The stack is linear and looks almost black until it's stretched. Work in this order, and save a new file after each step so you can go back. The numbers below are what worked on the October M31 stack; treat them as starting points.
 
 1. **Open.** Open Siril, click the home icon to set the working folder to the run's `processing/<date>_siril-all/` folder, and open the `_linear.fit`. Set the display mode at the bottom to **Autostretch** so you can see the image. This changes the view only, not the data.
