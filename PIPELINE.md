@@ -12,7 +12,7 @@ Every session goes through the same six steps, in order. Raw data never changes 
 3. **Check frame quality** (optional, when trying new settings): `astro-frame-stats` measures every frame of one night and compares filter cut-offs.
 4. **Stack:** `astro-stack` stacks every night of a target into one 32-bit linear image. It reuses earlier batches, so only new nights are processed.
 5. **Process in Siril:** crop, background extraction, plate-solve, colour calibration (SPCC), GHS stretch, export a 16-bit TIFF.
-6. **Finish in Photoshop** on the Mac: StarXTerminator, then final adjustments on the starless layer.
+6. **Finish in Photoshop** on the Mac, opening the TIFF over the network share: StarXTerminator, then adjustment layers over the starless image.
 
 After a night out, `astro-nightly` runs steps 1, 2 and 4 in one go: ingest, back up, then stack every target that got a new night (`astro-stack --changed`), stopping at the first step that fails. Run the steps separately when you want to check frame quality before stacking.
 
@@ -22,9 +22,9 @@ All commands run on the Linux workstation (Ubuntu) unless noted; on macOS the dr
 
 | What | Example path (Linux) | Notes |
 | --- | --- | --- |
-| Archive drive (named Astro) | `/run/media/$USER/Astro` | The one true copy. `raw/`, `final/`, `notes.md` are irreplaceable |
+| Archive drive | `/srv/astro` | The one true copy, an internal drive. `raw/`, `final/`, `notes.md` are irreplaceable. Shared to the Mac over SMB ([setup](#sharing-the-archive-with-a-mac)) |
 | Scratch | `/data/astro-work` | Intermediates from stacking; safe to delete after a run |
-| Mirror drive | `/run/media/$USER/T9/Astro-mirror` | Second copy; must be exFAT to move between Mac and Linux |
+| Backup drive | `/run/media/$USER/AstroBackup` | Second copy, an external drive; exFAT so a Mac can read it too |
 | NAS | `nas:/volume1/homes/youruser/Astrophotography` | Third copy, over SSH |
 | Seestar | Auto-detected `MyWorks` folder | Plug into a rear-panel USB port, not a hub |
 | Tools | `~/Projects/theresamclaird/astro-tools` | `git pull` updates every command |
@@ -35,7 +35,7 @@ Inside the archive, each target has `raw/<night>/` (light frames), `seestar-stac
 
 - [ ] Clone and install: `git clone https://github.com/theresamclaird/astro-tools.git ~/Projects/theresamclaird/astro-tools && cd ~/Projects/theresamclaird/astro-tools && ./install.sh`
 - [ ] Make sure `~/.local/bin` is on the PATH in both `~/.bashrc` and `~/.zshrc`.
-- [ ] Edit `~/.config/astro-tools/config`: `ASTRO_ARCHIVE=/run/media/$USER/Astro`, `ASTRO_WORK=/data/astro-work`, `ASTRO_NAS=nas:/volume1/homes/youruser/Astrophotography`. Leave `ASTRO_SOURCE` commented out so the Seestar is found automatically.
+- [ ] Edit `~/.config/astro-tools/config`: `ASTRO_ARCHIVE=/srv/astro`, `ASTRO_WORK=/data/astro-work`, `ASTRO_NAS=nas:/volume1/homes/youruser/Astrophotography`. Leave `ASTRO_SOURCE` commented out so the Seestar is found automatically.
 - [ ] Install Siril 1.4+ from Flatpak (`flatpak install flathub org.siril.Siril`), not apt. Ubuntu's package is a release candidate the scripts reject.
 - [ ] Let the Flatpak see the drives: `flatpak override --user --filesystem=/run/media/$USER --filesystem=/data org.siril.Siril`
 - [ ] Install the local Gaia catalogue: `siril_cat_healpix8_astro.dat` in `~/.var/app/org.siril.Siril/data/siril/`, set in Siril under Preferences → Astrometry. Plate-solving then takes minutes instead of hours and doesn't depend on the online server.
@@ -73,12 +73,12 @@ What else it does:
 
 ## Step 2: Back up
 
-`astro-backup` copies the archive to a destination, never deletes anything there, then verifies the files it copied and recopies any that fail (`--full` re-checks the whole copy against `MANIFEST.sha256`). Run it to the mirror drive and to the NAS after every ingest.
+`astro-backup` copies the archive to a destination, never deletes anything there, then verifies the files it copied and recopies any that fail (`--full` re-checks the whole copy against `MANIFEST.sha256`). Run it to the backup drive and to the NAS after every ingest.
 
-**To a mirror drive** (a mounted drive, here a Samsung T9, verified by reading every file back):
+**To a backup drive** (a mounted drive; copied files are read back from the disk to verify them):
 
 ```bash
-astro-backup /run/media/$USER/T9/Astro-mirror
+astro-backup /run/media/$USER/AstroBackup
 ```
 
 **To the NAS** (over SSH; the NAS checks its own copy, so nothing is read back over the network):
@@ -220,32 +220,58 @@ The stack is linear and looks almost black until it's stretched. Work in this or
 
 1. **Open.** Open Siril, click the home icon to set the working folder to the run's `processing/<date>_siril-all/` folder, and open the `_linear.fit`. Set the display mode at the bottom to **Autostretch** so you can see the image. This changes the view only, not the data.
 2. **Rotate and crop.** The mosaic has ragged edges. If the framing is tilted, rotate first (Image Processing → Geometry → Rotation; −17.65° with Lanczos for M31). Draw a box inside the fully covered area, right-click → Crop. Save as `M31_crop.fit`.
-3. **Remove the background gradient.** Image Processing → Background Extraction. Polynomial, degree 2, correction **Subtraction**. Generate the samples, then right-click to remove any that sit on the galaxy or its faint halo. Compute, check the result, Apply. Save as `M31_bg.fit`.
+3. **Remove the background gradient.** Image Processing → Background Extraction. Polynomial, degree 2, correction **Subtraction**. Generate the samples, then right-click to remove any that sit on the galaxy or its faint halo. Compute, check the result, Apply. Save as `M31_bg.fit`. For a field filled with nebula, such as NGC 7000, see [Processing notes](#processing-notes): place only a few samples, all on dark dust or empty star field.
 4. **Plate-solve.** Tools → Astrometry → Image Plate Solver. Search for M31, then Solve; the local catalogue makes this quick. Rotation and cropping discard the solution, so this step is always needed before colour calibration.
-5. **Calibrate colour (SPCC).** Image Processing → Colour Calibration → Spectrophotometric Colour Calibration. Sensor: ZWO Seestar S50. Filter: **UV/IR Block**, because the frames were shot through the IR-cut filter. White reference: **Average Spiral Galaxy**. Apply and check the log: about 2,000 stars matched last time. Save as `M31_spcc.fit`.
+5. **Calibrate colour (SPCC).** Image Processing → Colour Calibration → Spectrophotometric Colour Calibration. Sensor: ZWO Seestar S50. Filter: **UV/IR Block**, because the frames were shot through the IR-cut filter. White reference: **Average Spiral Galaxy**. For nights shot with the LP (dual-band) filter, choose sensor **ZWO Seestar S50 Pro** and filter **ZWO Duo-Band** instead; never mix filtered and unfiltered nights in one stack. Apply and check the log: about 2,000 stars matched last time. Save as `M31_spcc.fit`.
 6. **Stretch with GHS.** Image Processing → Stretches → Generalised Hyperbolic Stretch. Switch the display mode to **Linear** first (close the dialog if the dropdown is greyed out), so the preview isn't auto-stretched on top. Linear data looks black on screen; that's expected.
     1. **Remove the pedestal, per channel.** Type of stretch **Linear stretch (BP shift)**, colour model **Independent channel values**. Zoom the histogram (type 10 in the box above it) and set the black point just left of the sky peak, with shadow clip near 0. Apply. This matters most when the console has said *"Marginally out of range pixels detected: scaling to [0,1]"*: background extraction left pixels below zero, Siril shifted the whole image up, and that grey offset washes the colour out of everything after it. (October 2026 stack: sky at 0.07, black point 0.070.)
     2. **Main stretch.** Type **Generalised hyperbolic transform**, colour model **Human weighted luminance**. Set SP just above the sky by typing it (about 0.005 after step 1; the eyedropper can give nonsense values here). D = 3, b = 6, LP = 0, HP = 0.95. Aim for roughly what the AutoStretch display shows: dark sky, warm core, core not a white blob. Too bright: lower D. Too dim: raise D, or apply and do a second smaller pass. Apply.
     3. **Darken the sky.** Linear stretch (BP shift), Human weighted luminance, black point until the sky sits around 0.08–0.12, shadow clip under about 0.1%. Toggle Preview to check the faint halo doesn't shrink. Apply. (October 2026: BP 0.091.)
     4. Skip extra brightening passes here: they bloat the stars. Stretch the galaxy further in Photoshop after StarXTerminator. Save as `M31_stretched.fit`.
 7. **Saturation.** Image Processing → Colour Saturation, amount about 0.5. If even 1.0 barely changes anything, the colour was washed out by a pedestal: go back to `M31_spcc.fit` and redo step 6 from 6.1. Optionally Remove Green Noise (SCNR) if the background looks green. Save as `M31_final_siril.fit`.
-8. **Export for Photoshop.** File → Save As, type **TIFF**, **16-bit**, into `Targets/M31_Andromeda-Galaxy/final/<date>_siril-all/`.
+8. **Export for Photoshop.** Set the bit depth to **16-bit** with the dropdown at the top right of the Siril window first, then File → Save As, type **TIFF**, into the target's `processing/` folder or `Targets/M31_Andromeda-Galaxy/final/<date>_siril-all/`.
 
 When re-processing a newer stack, repeat from step 1 on the new `_linear.fit`. The settings carry over roughly, but use the eyedropper again: SP depends on the data.
 
 ## Step 6: Finish in Photoshop
 
-Separating the stars from the galaxy lets you push the galaxy's contrast and colour without bloating the stars. This runs on the Mac, with the RC Astro StarXTerminator plugin.
+Separating the stars from the nebula or galaxy lets you push its contrast and colour without bloating the stars. This runs on the Mac, with the RC Astro StarXTerminator plugin.
 
-1. Get the TIFF to the Mac: plug in the Astro drive (it's exFAT, so both machines read it) or copy it from the NAS.
-2. Open the 16-bit TIFF in Photoshop and duplicate the background layer.
-3. On the copy: Filter → RC Astro → StarXTerminator. Turn on its option to generate a star image, if your version has it, to get the stars on their own layer. This copy becomes the **starless** layer.
-4. If there's no star-image option, make the stars layer yourself: duplicate the original again, then Image → Apply Image with the starless layer, blending **Subtract**.
-5. Work on the starless layer: Curves or Levels for contrast in the dust lanes and outer arms, then colour and saturation. Watch the sky background; keep it neutral and just above black.
-6. Put the stars layer on top with blend mode **Screen**. Lower its opacity to make the stars less prominent.
-7. Save the layered file as a PSD in `final/<date>_siril-all/`, then export a JPEG or PNG for sharing.
+1. **Open the TIFF in place.** The archive drive is shared from Prometheus over SMB: in Finder, ⌘K → `smb://prometheus.local/astro`. Open the 16-bit TIFF straight from the target's `processing/` folder and save everything back beside it; there's nothing to copy, and the next `astro-backup` backs it all up. (Setup: [Sharing the archive with a Mac](#sharing-the-archive-with-a-mac).)
+2. **Split the stars.** Run Filter → RC Astro → StarXTerminator with **Generate star image** on. Name the starless layer `sxt` and the star layer `stars`. Convert `sxt` to a **Smart Object** so the filters below stay editable.
+3. **Build the layer stack**, bottom to top:
 
-Keep the PSD: with the layers you can return to the stars-versus-galaxy balance later without starting over.
+    | Layer | What it does |
+    | --- | --- |
+    | `sxt` (smart object) | The starless image. Camera Raw Filter on it for texture, clarity and dehaze, used lightly |
+    | `neutral` (Curves) | Sets the colour balance: grey eyedropper (Sample Size **31×31 Average**) clicked on something that should be neutral |
+    | `lift` (Curves) | Brightens the faint structure. Keep the bottom-left point at output 8–12 so the darkest areas stay dark |
+    | Vibrance (optional) | Gentle; it saturates the faint colours more than the strong ones |
+    | `stars` | Blend mode **Screen**, opacity about 65% |
+
+4. **Check with numbers, not just your eyes.** Open the Info panel (F8) and hover over the darkest dust and the background. Dark areas should read roughly R ≈ G ≈ B, slightly warm at most. If R is lower than G and B there, the neutral point was set on something red: see [Processing notes](#processing-notes).
+5. **Crop** with **Delete Cropped Pixels** unticked, so you can change the framing later.
+6. **Save** the layered PSD in the `processing/` folder, then export a PNG or JPEG for sharing.
+
+Keep the PSD: the adjustment layers and smart filter can all be changed later without starting over.
+
+## Processing notes
+
+Lessons from processing M31 and NGC 7000 (October 2026).
+
+**Colour that looks washed out, and Saturation that barely changes it, is a pedestal.** If the Siril console said *"scaling to [0,1]"* after background extraction, the whole image was shifted up, and everything after it inherits a grey offset. Fix it with the per-channel black point (Step 5, 6.1) before the main stretch, not with more saturation.
+
+**Read values from the readout, not the preview.** Siril shows the pixel values under the cursor at the bottom right of the image. Set the display to **Linear** while previewing a stretch; with AutoStretch on, the preview is stretched twice and judging it is meaningless. Put SP just above the measured sky, never below it.
+
+**Export 16-bit from Siril.** Converting a 32-bit TIFF to 16-bit inside Photoshop lost colour; exporting 16-bit from Siril doesn't.
+
+**Galaxy fields and nebula fields need different neutral points.** Around M31 there is real empty sky, and it should be neutral. In NGC 7000 almost every pixel holds faint Hα, so the "sky" is really nebula and should stay red. The only neutral reference is the dark dust (the Gulf of Mexico, the lane by the Pelican). Neutralizing on the red haze takes red out of everything and turns the dust lanes teal, which is the tell-tale sign.
+
+**Background extraction on a nebula field: few samples, only on dust.** With samples spread across the frame, the tool treats real Hα as gradient and subtracts it. Place a handful, all on dark dust or the darkest star fields. RBF handles uneven backgrounds better than a polynomial; if colours still differ left to right after neutralizing in Photoshop, redo this step rather than fighting it with Curves.
+
+**Mosaic seams.** Panel edges in a mosaic stack can show as thin straight lines and a brightness step. Background extraction softens them only a little. For now, crop inside them where you can. A seam-blending option for `astro-stack` is a planned change.
+
+**Filters must not mix.** Nights shot with the dual-band (LP) filter end in `_LP`. Stack them separately: `astro-stack NGC7000 --nights '*_LP'`.
 
 ## Other tools: per-panel mosaics
 
@@ -260,6 +286,42 @@ Keep the PSD: with the layers you can return to the stars-versus-galaxy balance 
 | 5 | `seestar-mosaic DIR` | Plate-solves the panel masters and assembles the mosaic |
 
 These still expect the old Seestar folder layout (`<Target>_mosaic_sub`) rather than the archive's `raw/<night>/` folders. Updating them is a planned change.
+
+## Sharing the archive with a Mac
+
+If stacking runs on a Linux machine and Photoshop on a Mac, share the archive over SMB so the Mac opens and saves files in place. On the Linux machine (Ubuntu shown):
+
+```bash
+sudo apt install samba
+```
+
+Add to `/etc/samba/smb.conf`, the first three lines directly under `[global]` (macOS misbehaves if only some shares use `fruit`):
+
+```ini
+[global]
+   vfs objects = catia fruit streams_xattr
+   fruit:metadata = stream
+   fruit:model = MacSamba
+
+[astro]
+   path = /srv/astro
+   valid users = youruser
+   force user = youruser
+   read only = no
+   fruit:delete_empty_adfiles = yes
+   fruit:wipe_intentionally_left_blank_rfork = yes
+   veto files = /.DS_Store/
+   delete veto files = yes
+```
+
+```bash
+sudo smbpasswd -a youruser                 # Samba's own password
+testparm -s 2>&1 | grep -i warning || echo no warnings
+sudo systemctl enable --now smbd           # Fedora: smb, plus firewall-cmd and setsebool -P samba_export_all_rw on
+sudo ufw allow samba                       # only if ufw is active
+```
+
+On the Mac: Finder → ⌘K → `smb://yourhost.local/astro`, save the password in the keychain, and add the mounted share to System Settings → General → Login Items. Save in Photoshop before the Mac sleeps or leaves the network.
 
 ## Troubleshooting
 
