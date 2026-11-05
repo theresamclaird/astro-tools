@@ -94,6 +94,7 @@ astro-nightly            # ingest -> backup -> stack --changed
 | `astro-nightly` | Runs `astro-ingest`, `astro-backup` and `astro-stack --changed` in order, stopping at the first failure |
 | `astro-frame-stats` | Measures every frame of one night (sharpness, roundness, background, star count, by mosaic panel), shows what each filter cut would drop, and optionally stacks the night with several filters to compare |
 | `astro-process` | Takes a stacked linear image through crop, background extraction, plate-solve, colour calibration and a two-pass stretch in Siril, choosing every stretch setting from the measured sky level, and writes a 16-bit TIFF for Photoshop |
+| `astro-merge-targets` | Merges one target's raw data into another (two objects in one field of view, such as IC 5070 inside the NGC 7000 mosaic), rewriting the manifest, stacking queue and notes, and routing future sessions to the merged target |
 | `seestar-split-panels` | Groups a mosaic's subs into one folder per panel by clustering their RA/Dec |
 | `seestar-reject-frames` | Finds and sets aside frames spoiled by an obstruction (e.g. a lit tree branch) |
 | `seestar-stack-panels` | Stacks each panel into a master with Siril |
@@ -348,6 +349,39 @@ the empty mosaic edges; background samples are placed automatically, which can
 be fooled by a very large galaxy. Treat the result as a starting point: open
 `07_stretched` or `08_final` in Siril to fine-tune, or crop by hand and pass
 `--crop`.
+
+### astro-merge-targets
+
+```
+astro-merge-targets SOURCE DEST [--dry-run] [--yes] [--alias NAME ...] [--archive PATH]
+```
+
+For two targets that turn out to be one field of view and should be stacked
+together, e.g. `astro-merge-targets IC5070 NGC7000`. SOURCE and DEST are folder
+names or unique prefixes. Start with `--dry-run`.
+
+- Moves SOURCE's `raw/` and `seestar-stacks/` into DEST. A night folder that
+  exists in both is merged into DEST's. Moves are renames on the archive
+  drive, so contents and checksums don't change.
+- Refuses to move anything if a file would land on a different existing file;
+  a file already at DEST with the same SHA-256 is treated as merged and the
+  SOURCE duplicate is removed.
+- Rewrites the moved paths in `MANIFEST.sha256` (the old manifest is kept as
+  `_tools/MANIFEST.sha256.before-merge-<time>`) and in the stacking queue, and
+  rebuilds both targets' `notes.md` tables.
+- Adds `"<Seestar name><TAB>DEST"` to `_tools/targets.tsv` (IC5070 → `IC 5070`),
+  so future sessions of that object are filed under DEST. `targets.tsv` is
+  checked before catalogue-id matching, so this works even while the SOURCE
+  folder still exists. Add other names with `--alias`.
+- Leaves SOURCE's `notes.md`, `processing/` and `final/` in place and doesn't
+  delete the SOURCE folder; tidy it by hand.
+- Re-running after an interruption finishes the job.
+- Backups never delete, so after the next `astro-backup` the old SOURCE paths
+  remain on the NAS and mirror drive beside the new ones. Remove them there by
+  hand to reclaim the space.
+
+Afterwards, restack DEST (`astro-stack DEST --dry-run` first): nights whose
+frame count changed are restacked, the other stored masters are reused.
 
 ### Mosaics
 
