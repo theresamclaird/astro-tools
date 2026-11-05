@@ -4,7 +4,7 @@ choosing every stretch setting from the measured sky level.
 
   astro-process TARGET [RUN] [--crop X,Y,W,H] [--sensor S] [--filter F]
                 [--whiteref W] [--bg-degree N] [--sky TARGET] [--saturation A]
-                [--dry-run]
+                [--no-sxt] [--dry-run]
 
   TARGET   target folder or unique prefix (M31)
   RUN      processing/ run folder or unique prefix (default: the newest one that
@@ -16,6 +16,7 @@ choosing every stretch setting from the measured sky level.
   --bg-degree  background-extraction polynomial degree (default 2; 0 = skip)
   --sky    final sky brightness, 0-1 (default 0.10)
   --saturation  colour saturation amount (default 0.5; 0 = skip)
+  --no-sxt skip StarXTerminator even when rc-astro is installed
 
 Steps, each saved as its own FITS in processing/<run>/auto/ so you can pick up
 from any of them in Siril:
@@ -28,6 +29,8 @@ from any of them in Siril:
   06_stretch2    GHS, luminance: SP above the new sky, LP at the sky, D 2, b 4
   07_stretched   black point so the sky sits at --sky, clipping <= 0.1%
   08_final       saturation; also written as a 16-bit TIFF for Photoshop
+  then, if RC Astro's rc-astro is installed, StarXTerminator splits the TIFF
+  into <tiff>_starless.tif and <tiff>_stars.tif (see astro-sxt)
 The sky level is measured after every step (median of the dimmest half of the
 image, which is sky on these fields), and the values used are written to
 auto/README.txt. It's a consistent starting point, not a replacement for judging
@@ -39,6 +42,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from frame_stats import find_siril, find_dir, die  # noqa: E402
+import sxt  # noqa: E402
 
 
 # ---------------------------------------------------------------- FITS I/O
@@ -148,6 +152,7 @@ def main():
     ap.add_argument("--sky", type=float, default=0.10)
     ap.add_argument("--saturation", type=float, default=0.5)
     ap.add_argument("--archive", default=os.environ.get("ASTRO_ARCHIVE") or "/Volumes/Astro")
+    ap.add_argument("--no-sxt", dest="sxt", action="store_false")
     ap.add_argument("--dry-run", "-n", action="store_true")
     a = ap.parse_args()
 
@@ -285,6 +290,17 @@ def main():
     note("08 saturation %.2f; final sky %.4f (R/G/B %s)" % (a.saturation, sky, " ".join("%.4f" % c for c in chans)))
     note("")
     note("TIFF (16-bit) for Photoshop: %s.tif" % tif)
+    rc = sxt.find_rc_astro() if a.sxt else None
+    if rc:
+        print("StarXTerminator...", flush=True)
+        try:
+            starless, stars = sxt.split(tif + ".tif", rc, overwrite=True, log=log)
+            note("StarXTerminator (unscreened stars): %s" % starless)
+            note("                                    %s" % stars)
+        except RuntimeError as e:
+            note("StarXTerminator FAILED (the TIFF is fine; retry with astro-sxt): %s" % e)
+    elif a.sxt:
+        note("(rc-astro not found: StarXTerminator skipped; split the TIFF in Photoshop or with astro-sxt)")
     with open(os.path.join(auto, "README.txt"), "w") as f:
         f.write("\n".join(notes) + "\n")
     print("Steps and settings: %s/README.txt   Log: %s" % (auto, log))

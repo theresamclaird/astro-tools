@@ -93,6 +93,7 @@ astro-nightly            # ingest -> backup -> stack --changed
 | `astro-stack` | Stacks every night of one target from the archive with Siril: plate-solves each frame, registers onto the full mosaic canvas, stacks, and writes the result to the target's `processing/` folder. `--changed` does this for every target with newly queued nights |
 | `astro-nightly` | Runs `astro-ingest`, `astro-backup` and `astro-stack --changed` in order, stopping at the first failure |
 | `astro-frame-stats` | Measures every frame of one night (sharpness, roundness, background, star count, by mosaic panel), shows what each filter cut would drop, and optionally stacks the night with several filters to compare |
+| `astro-sxt` | Splits a stretched TIFF into starless and stars images with RC Astro's StarXTerminator (`rc-astro`), ready to layer in Photoshop |
 | `astro-process` | Takes a stacked linear image through crop, background extraction, plate-solve, colour calibration and a two-pass stretch in Siril, choosing every stretch setting from the measured sky level, and writes a 16-bit TIFF for Photoshop |
 | `astro-merge-targets` | Merges one target's raw data into another (two objects in one field of view, such as IC 5070 inside the NGC 7000 mosaic), rewriting the manifest, stacking queue and notes, and routing future sessions to the merged target |
 | `seestar-split-panels` | Groups a mosaic's subs into one folder per panel by clustering their RA/Dec |
@@ -324,14 +325,16 @@ at the end; delete it when you're done.
 
 ```
 astro-process TARGET [RUN] [--crop X,Y,W,H] [--sensor S] [--filter F] [--whiteref W]
-              [--bg-degree N] [--sky 0.10] [--saturation 0.5] [--dry-run]
+              [--bg-degree N] [--sky 0.10] [--saturation 0.5] [--no-sxt] [--dry-run]
 ```
 
 Automates the Siril half of processing (Step 5 in [PIPELINE.md](PIPELINE.md)) so
 every image starts from the same, reasonable point. It works on the newest
 `processing/<run>/*_linear.fit` (or the `RUN` given) and saves every step to
 `processing/<run>/auto/`: `01_crop`, `02_bg`, `03_spcc`, `04_offset`,
-`05_stretch1`, `06_stretch2`, `07_stretched`, `08_final` and a 16-bit TIFF.
+`05_stretch1`, `06_stretch2`, `07_stretched`, `08_final` and a 16-bit TIFF,
+then splits that TIFF into starless and stars images with
+[`astro-sxt`](#astro-sxt) when `rc-astro` is installed.
 
 All stretch settings come from the sky level, measured after each step:
 
@@ -349,6 +352,22 @@ the empty mosaic edges; background samples are placed automatically, which can
 be fooled by a very large galaxy. Treat the result as a starting point: open
 `07_stretched` or `08_final` in Siril to fine-tune, or crop by hand and pass
 `--crop`.
+
+### astro-sxt
+
+```
+astro-sxt IMAGE... [--depth 16U] [--no-unscreen] [--device auto] [--overwrite] [--dry-run]
+```
+
+Runs StarXTerminator through RC Astro's command-line tool, `rc-astro`, which
+needs a StarXTerminator licence (the Photoshop or PixInsight one works) and
+`rc-astro license` run once on the machine. For each image it writes
+`<name>_starless.tif` and `<name>_stars.tif` beside it. The stars are
+"unscreened" by default, so the stars layer in blend mode Screen over the
+starless one rebuilds the original exactly; `--no-unscreen` gives original minus
+starless instead. Images already split are skipped unless `--overwrite`. Set
+`RC_ASTRO` if `rc-astro` isn't on your PATH. `astro-process` runs it on its own
+TIFF when `rc-astro` is installed (`--no-sxt` to skip).
 
 ### astro-merge-targets
 
