@@ -12,7 +12,7 @@ Every session goes through the same six steps, in order. Raw data never changes 
 3. **Check frame quality** (optional, when trying new settings): `astro-frame-stats` measures every frame of one night and compares filter cut-offs.
 4. **Stack:** `astro-stack` stacks every night of a target into one 32-bit linear image. It reuses earlier batches, so only new nights are processed.
 5. **Process in Siril:** crop, background extraction, plate-solve, colour calibration (SPCC), GHS stretch, export a 16-bit TIFF.
-6. **Finish in Photoshop** on the Mac, opening the TIFF over the network share: StarXTerminator, then adjustment layers over the starless image.
+6. **Split the stars** on the workstation with `astro-sxt`, then **finish in Photoshop** on the Mac over the network share: adjustment layers over the starless image, stars on top.
 
 After a night out, `astro-nightly` runs steps 1, 2 and 4 in one go: ingest, back up, then stack every target that got a new night (`astro-stack --changed`), stopping at the first step that fails. Run the steps separately when you want to check frame quality before stacking.
 
@@ -235,10 +235,16 @@ When re-processing a newer stack, repeat from step 1 on the new `_linear.fit`. T
 
 ## Step 6: Finish in Photoshop
 
-Separating the stars from the nebula or galaxy lets you push its contrast and colour without bloating the stars. This runs on the Mac, with the RC Astro StarXTerminator plugin.
+Separating the stars from the nebula or galaxy lets you push its contrast and colour without bloating the stars. StarXTerminator runs on the Linux workstation (RC Astro's `rc-astro` command-line tool, which uses the same licence as the Photoshop plugin); Photoshop runs on the Mac.
 
 1. **Open the TIFF in place.** The archive drive is shared from Prometheus over SMB: in Finder, ⌘K → `smb://prometheus.local/astro`. Open the 16-bit TIFF straight from the target's `processing/` folder and save everything back beside it; there's nothing to copy, and the next `astro-backup` backs it all up. (Setup: [Sharing the archive with a Mac](#sharing-the-archive-with-a-mac).)
-2. **Split the stars.** Run Filter → RC Astro → StarXTerminator with **Generate star image** on. Name the starless layer `sxt` and the star layer `stars`. Convert `sxt` to a **Smart Object** so the filters below stay editable.
+2. **Split the stars** on the workstation:
+
+    ```bash
+    astro-sxt /srv/astro/Targets/NGC7000*/processing/ngc7000-stretched.tif
+    ```
+
+    It writes `ngc7000-stretched_starless.tif` and `ngc7000-stretched_stars.tif` beside the TIFF, 16-bit, using the GPU. (`astro-process` does this automatically for its own TIFF.) In Photoshop, open the starless TIFF, then drag the stars TIFF onto it as a layer, holding Shift so it lands aligned. Name them `sxt` and `stars`, and convert `sxt` to a **Smart Object** so the filters below stay editable. Without `rc-astro`, use the Photoshop plugin instead: Filter → RC Astro → StarXTerminator with **Generate star image** and **Unscreen stars** on.
 3. **Build the layer stack**, bottom to top:
 
     | Layer | What it does |
